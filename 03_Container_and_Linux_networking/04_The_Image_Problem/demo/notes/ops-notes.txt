@@ -1,0 +1,5 @@
+Internal troubleshooting notes for the lecture demo.
+
+- Temporary debug route discussed during testing: /debug/config
+- This file should never be copied into a runtime image
+- If `COPY . .` ships this file, the build context is too broad

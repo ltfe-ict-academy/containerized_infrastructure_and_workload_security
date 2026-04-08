@@ -1,0 +1,19 @@
+FROM python:3.12-bookworm
+
+WORKDIR /app
+
+COPY . .
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl git vim \
+    && rm -rf /var/lib/apt/lists/*
+
+# Common anti-pattern: deleting a secret in a later layer does not erase it
+# from earlier image layers.
+RUN rm -f .env
+
+ENV APP_ENV=development
+
+EXPOSE 8080
+
+CMD ["python", "app.py"]
