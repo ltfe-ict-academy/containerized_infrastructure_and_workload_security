@@ -1,0 +1,7 @@
+*
+!index.html
+!app.js
+!styles.css
+!nginx.conf
+!Dockerfile
+!Dockerfile.insecure

@@ -1,0 +1,282 @@
+services:
+  edge-proxy:
+    image: course-edge:day4
+    build:
+      context: ./edge
+    ports:
+      - "${EDGE_HTTP_PORT:-8080}:8080"
+      - "${EDGE_HTTPS_PORT:-8443}:8443"
+    volumes:
+      - ./certs/runtime:/etc/nginx/certs:ro
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - edge_net
+      - app_net
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges=true
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080 >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    image: course-frontend:day4
+    build:
+      context: ./frontend
+    expose:
+      - "8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - app_net
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges=true
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080 >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  backend:
+    image: course-backend:day4
+    build:
+      context: ./backend
+    environment:
+      APP_DB_HOST: db
+      APP_DB_NAME: ${APP_DB_NAME:-courseapp}
+      APP_DB_USER: ${APP_DB_USER:-courseapp}
+      APP_DB_PASSWORD_FILE: /run/secrets/app_db_password
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      ENABLE_DEBUG_ROUTES: "false"
+      USE_SAFE_QUERIES: "true"
+    secrets:
+      - app_db_password
+      - redis_password
+    expose:
+      - "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app_net
+      - data_net
+      - observability_net
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges=true
+    pids_limit: 200
+    init: true
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')\" || exit 1",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  db:
+    image: postgres:18.3-bookworm
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-courseapp}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      APP_DB_USER: ${APP_DB_USER:-courseapp}
+      APP_DB_NAME: ${APP_DB_NAME:-courseapp}
+    secrets:
+      - postgres_password
+      - app_db_password
+    volumes:
+      - pg_data:/var/lib/postgresql
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - ./db/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    networks:
+      - data_net
+    security_opt:
+      - no-new-privileges=true
+    pids_limit: 300
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-courseapp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  redis:
+    image: course-redis:day4
+    build:
+      context: ./redis
+    secrets:
+      - redis_password
+    volumes:
+      - redis_data:/data
+    networks:
+      - data_net
+    security_opt:
+      - no-new-privileges=true
+    pids_limit: 100
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "redis-cli -a \"$$(cat /run/secrets/redis_password)\" PING | grep PONG >/dev/null 2>&1 || exit 1",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.55.1
+    privileged: true
+    command:
+      - --docker_only=true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    networks:
+      - observability_net
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.5.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      backend:
+        condition: service_healthy
+      cadvisor:
+        condition: service_started
+    networks:
+      - observability_net
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.6.0
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    networks:
+      - observability_net
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.14.0
+    command: ["run", "/etc/alloy/config.alloy"]
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      loki:
+        condition: service_started
+    networks:
+      - observability_net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.4.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards/json:ro
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_started
+    networks:
+      - observability_net
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  redis_data:
+  prometheus_data:
+  loki_data:
+  grafana_data:
+
+secrets:
+  postgres_password:
+    file: ./secrets/runtime/postgres_password.txt
+  app_db_password:
+    file: ./secrets/runtime/app_db_password.txt
+  redis_password:
+    file: ./secrets/runtime/redis_password.txt
+  grafana_admin_password:
+    file: ./secrets/runtime/grafana_admin_password.txt
+
+networks:
+  edge_net:
+    driver: bridge
+
+  app_net:
+    driver: bridge
+    internal: true
+
+  data_net:
+    driver: bridge
+    internal: true
+
+  observability_net:
+    driver: bridge
+    internal: true
