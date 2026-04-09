@@ -25,7 +25,7 @@ A practical orientated course on containerized infrastructure and workload secur
     - Introduction to Linux Networking for Containers 
     - Iptables and basics of the Linux kernel firewall
     - Docker networks, overlays, DNS 
-    - Insecure by default? Common traps of container networking
+    - Common traps of container networking
     - Hands-on: Setting up a secure networking environment in a variety of configurations
 
 4. [**Hardening & Defense-in-Depth**](./04_Hardening_and_Defense_in_Depth/README.md)
