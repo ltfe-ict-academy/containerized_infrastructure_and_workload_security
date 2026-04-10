@@ -1,33 +1,34 @@
-A good **Defend The Flag** for this course is a **single misconfigured VM running a Docker Compose stack**. That lets participants touch almost every topic from the week: images, runtime security, Linux/container networking, secrets, logging, and host hardening. Compose is also a practical fit because Docker documents first-class support for Compose networking and secrets, while mainstream hardening guidance for containers emphasizes non-root execution, least privilege, restricted capabilities, seccomp/AppArmor, minimal exposure, and safer secret handling. ([Docker Documentation][1])
+# Defend The Flag: Applying the lessons learnt in practice
+
+A **Defend The Flag** for this course is a **single misconfigured VM running a Docker Compose stack**. That lets participants touch almost every topic from the week: images, runtime security, Linux/container networking, secrets, logging, and host hardening.
 
 ## Challenge concept
 
 Build a scenario like this:
-
-* **public reverse proxy** (`nginx` or `traefik`)
-* **frontend web app**
-* **backend API**
+* **public reverse proxy** (`nginx`)
+* **frontend web app** (simple `react` app)
+* **backend API** (Python FastAPI app)
 * **Postgres**
 * **Redis**
 * **optional “admin” container** that should never be public
 * **optional monitoring** (`prometheus` + `node-exporter` or just a simple metrics endpoint)
 
-The starting state is “works, but dangerously.” The participants win only if the application **still works** after they harden it. That mirrors real operations better than a pure break/fix lab.
+The starting state is “works, but dangerously.” The participants win only if the application **still works** after they harden it.
 
 ## What to misconfigure on purpose
 
-I would seed 10–14 issues, with a mix of easy, medium, and “stretch” fixes.
 
 ### 1) Runtime hardening issues
 
 * Containers run as `root`
 * `privileged: true` on at least one service
-* extra Linux capabilities added, especially something like `SYS_ADMIN`
-* no `no-new-privileges`
+* extra Linux capabilities added, especially something like `SYS_ADMIN` (Limit capabilities (Grant only specific capabilities, needed by a container))
+* no `no-new-privileges` option (Prevent in-container privilege escalation)
 * writable root filesystem
 * `/var/run/docker.sock` mounted into the app
 * broad host bind mounts like `/` or `/etc`
 * no healthchecks
+* no logs rotation
 
 These are exactly the kinds of risky defaults and exceptions that OWASP and Docker security guidance warn about. Docker’s seccomp docs also note that the default profile is a moderate allowlist, so dropping to `unconfined` or over-privileging containers makes a good teaching trap. ([OWASP Cheat Sheet Series][2])
 
@@ -51,6 +52,7 @@ Docker’s build guidance recommends trusted, regularly updated base images and 
 * overly broad host firewall rules
 * Docker daemon exposed on TCP, especially insecurely
 * app can initiate outbound traffic anywhere
+* UFW misconfigured on mapped host ports
 
 Docker documents Compose networking and the Docker daemon attack surface; Kubernetes security guidance similarly treats workload isolation and network controls as core defenses. For a single-VM challenge, that translates nicely to private/internal Compose networks plus host firewall rules. ([Docker Documentation][1])
 
@@ -62,6 +64,8 @@ Docker documents Compose networking and the Docker daemon attack surface; Kubern
 * SSH too open, maybe password auth enabled
 * missing systemd restart settings
 * weak file permissions on deployment artifacts
+* Keep Host and Docker up to date -> not updated host
+
 
 Docker’s docs warn that the daemon is highly privileged and should only be controlled by trusted users; Docker also notes that the default `json-file` driver performs no log rotation by default, and recommends safer logging configuration to avoid disk exhaustion. ([Docker Documentation][4])
 
