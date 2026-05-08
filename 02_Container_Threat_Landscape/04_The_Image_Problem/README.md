@@ -339,7 +339,7 @@ PowerShell:
 Remove-Item private-token.txt
 ```
 
-## What Good Looks Like In 2026
+## Images Best Practices
 
 The secure baseline for image handling has moved. In a modern environment, the following controls are no longer "nice to have".
 
@@ -542,7 +542,7 @@ Mature pattern:
 - automatic pull requests or tickets when base image digests drift
 - policy around maximum image age
 
-## Reading Scanner Output Without Fooling Yourself
+## Container Image Scanning
 
 Scanners are essential. They are not oracles.
 

