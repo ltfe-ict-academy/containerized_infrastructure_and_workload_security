@@ -45,6 +45,16 @@ A practical orientated course on containerized infrastructure and workload secur
         - Runtime and Docker Compose hardening
         - Hardened deployment example
     - **Managing Secrets in Containerized Environments**
+        - Secrets fundamentals and threat model
+        - How secrets leak in Docker projects
+        - Environment variables, .env, and configuration boundaries
+        - Docker Compose secrets
+        - Build-time secrets with Docker BuildKit
+        - Runtime secret consumption patterns
+        - Secret storage options outside Kubernetes
+        - CI/CD, scanning, and supply-chain controls
+        - Rotation, revocation, auditing, and incident response
+        - Example: Harden a real Docker Compose app
     - **Container Monitoring and Observability**
     - **Practical examples of end-to-end exploitation, hardening and observability**
 

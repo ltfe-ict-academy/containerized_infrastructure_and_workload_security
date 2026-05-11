@@ -1,402 +1,588 @@
 # Managing Secrets In Containerized Environments
 
-After an attacker compromises an application, one of the first questions is usually:
+In a compromised application, the first question an attacker asks is "What credentials can I steal from here?" This reality elevates secrets management from an administrative afterthought to a fundamental pillar of container security. While web exploitation serves as the entry point and system hardening restricts an attacker's movement, secrets management ultimately dictates the level of authority accessible once a perimeter is breached. By centralizing and securing sensitive data, you ensure that even if an attacker lands within your environment, the secrets remain out of reach.
+
+## Secrets fundamentals and threat model
+
+### What is a secret?
+
+A secret is any value that grants access, proves identity, decrypts data, signs data, or allows one system to impersonate another. In Docker security, the most important teaching point is that secrets are not only “passwords.” A secret can be a tiny string copied into a `.env` file, a private key baked into an image layer, a CI token printed in build logs, or a certificate mounted into a container. Docker’s own documentation treats API tokens, passwords, and SSH keys as examples of sensitive values that should not be passed using Dockerfile `ARG` or `ENV`, because those mechanisms can persist in images or metadata. Some common types of secrets include:
+- **API keys**: API keys are one of the easiest secrets to underestimate because they often look like harmless application configuration. In practice, an API key is usually a bearer credential: whoever has it can call the service as your application, often without proving anything else. In a Docker project, API keys commonly leak through .env files, docker-compose.yml, Docker build arguments, container logs, or example configuration copied into Git. A practical exploit is simple: an attacker finds a leaked payment, AI, email, SMS, or cloud API key in a public repository or image layer and starts making requests that generate cost, steal data, or damage reputation.
+- **Database passwords**: A database password is dangerous because it often protects the most valuable part of the system: user data, business data, audit logs, sessions, and sometimes password hashes. In Dockerized applications, the classic mistake is placing POSTGRES_PASSWORD=supersecret directly in `docker-compose.yml` or an environment file that gets committed. A practical exploit does not require “hacking Docker”; the attacker simply obtains the Compose file, CI logs, backup archive, or image configuration, then connects to the database if it is reachable. Even if the database is not exposed to the internet, the password can still be useful after a second step, such as getting shell access to one container on the same Docker network. This is why database credentials should be scoped, rotated, and ideally injected at runtime.
+- **OAuth client secrets**: OAuth client secrets are often misunderstood because people confuse them with OAuth client IDs. The client ID usually identifies the application and is often public; the client secret authenticates the application and must be protected. If an OAuth client secret leaks from a container image or repository, an attacker may be able to impersonate the application in token exchange flows, depending on the OAuth grant type and provider configuration. A practical example is a backend service that stores `OAUTH_CLIENT_SECRET` in a Dockerfile `ENV`. Anyone with access to the image can inspect image metadata and recover it.
+- **TLS private keys**: TLS private keys are secrets because they prove the identity of a service and can sometimes decrypt captured traffic, depending on protocol versions and key exchange settings. In Docker environments, private keys often appear in bind-mounted certificate directories, reverse proxy containers, backup archives, or copied into images for convenience. A practical exploit is not always “decrypt all traffic”; often the bigger risk is impersonation. If an attacker steals the private key for `api.example.com`, they may be able to stand up a convincing fake service, intercept internal clients that trust the certificate, or abuse mutual TLS trust relationships.
+- **SSH keys**: SSH keys are secrets because they often grant interactive or automated access to servers, Git repositories, deployment targets, and CI/CD systems. In Docker projects, SSH keys leak when developers copy them into images to clone private repositories during build, mount their entire `~/.ssh` directory into a container, or pass keys through build arguments. The practical exploit is straightforward: recover the private key from the image or container filesystem, then attempt access to Git, servers, or deployment infrastructure.
+- **Cloud provider credentials**: Cloud credentials are especially dangerous because they often provide broad access: object storage, databases, container registries, queues, secrets managers, compute resources, and logs. In Docker, cloud credentials leak through local development mounts like `~/.aws`, CI variables, image layers, and debug logs. A practical exploit is a leaked AWS, Azure, or Google Cloud credential that lets an attacker list storage buckets, pull private container images, create compute resources for cryptomining, or read production secrets from a cloud secret manager.
+- **Signing keys**: Signing keys are secrets used to prove that an artifact, token, package, image, release, or message came from a trusted source. They are high-impact because compromise can turn trust itself into an attack vector. In containerized environments, signing keys might be used for JWT signing, package signing, image signing, update signing, or webhook verification. A practical exploit is severe: if a JWT signing key leaks, an attacker may forge authentication tokens; if a release signing key leaks, an attacker may distribute malicious artifacts that appear legitimate.
+- **Webhook tokens**: Webhook tokens are secrets that verify that an incoming request really came from a trusted system such as GitHub, Stripe, Slack, GitLab, or a CI/CD platform. In Docker apps, they often appear as `WEBHOOK_SECRET` in environment variables or Compose files. A practical exploit is request forgery: if the attacker knows the webhook token, they can send fake deployment events, fake payment events, fake user lifecycle events, or fake CI notifications.
+- **Internal service credentials**: Internal service credentials are usernames, passwords, shared tokens, mTLS keys, or API keys used between services. Teams often treat them as lower-risk because they are “internal only,” but Docker networks make lateral movement practical. If an attacker compromises one low-privilege container and discovers internal credentials, they may authenticate to a database, cache, message queue, admin API, or another service on the same Docker network.
+
+Not every configuration value is a secret. This distinction matters because if teams classify everything as secret, developers stop taking the label seriously. What is not usually a secret?
+- Hostnames
+- Port numbers
+- Feature flags
+- Public client IDs
+- Non-sensitive environment names
+
+### Secret lifecycle
+
+Secrets management is not only about where a value is stored. It is a lifecycle problem: a secret is created, distributed, used, stored, rotated, revoked, expired, and eventually destroyed. [OWASP’s Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html) emphasizes lifecycle concerns such as access control, rotation, expiration, auditing, and management across systems.
+- **Creation**: Secret creation is the moment where quality and ownership are established. A weak database password, overprivileged cloud key, or long-lived token starts the lifecycle already unsafe.
+- **Distribution**: Distribution is how the secret gets from storage to the place where it is needed. This is where many Docker failures happen. Developers send secrets in chat, paste them into `.env` files, attach them to tickets, copy them into Compose files, or print them in CI logs.
+- **Use**: Secret use is the moment the application actually reads the value. The safest pattern is usually: read the secret from a file or secret manager, use it only where needed, do not print it, do not expose it in error messages, and avoid passing it through command-line arguments.
+- **Storage**: Storage is where the secret rests when it is not actively being used. Bad storage includes Git history, Docker image layers, old `.tar` exports, CI artifacts, shell history, unencrypted backups, and copied .env files on laptops.
+- **Rotation**: Rotation means replacing an existing secret with a new one. Rotation matters because you rarely know exactly when a secret was copied, logged, cached, or leaked.
+- **Revocation**: Revocation is different from rotation. Rotation replaces; revocation invalidates. If a secret is suspected to be leaked, the safest assumption is that someone else may already have it. A practical incident workflow is: revoke the token, identify where it was used, rotate related credentials, review logs, and remove the leak from active locations.
+- **Expiration**: Expiration limits how long a secret can be useful. Short-lived credentials reduce blast radius because a stolen value becomes worthless sooner.
+- **Destruction**: Destruction means removing a secret from all places it should no longer exist. This is harder than it sounds. A secret may remain in Git history, Docker image layers, build cache, registry storage, backups, logs, crash dumps, and developer laptops.
+
+### Threat model for Dockerized apps
+
+A Docker threat model asks: who can get access to the secret, from where, and what can they do next? [NIST SP 800-190](https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-190.pdf) frames containers as portable and automatable application packages, but also warns that containerized environments introduce security concerns across images, registries, orchestrators, hosts, and runtime configuration.
+
+- **Malicious dependency**: A malicious dependency is dangerous because it runs inside your build or application with whatever access you gave the process. If your Docker build installs packages while a secret is available, a malicious install script may read that secret and exfiltrate it. If your application loads a compromised runtime dependency, it may read environment variables, mounted secret files, config directories, or cloud credentials.
+- **Compromised developer machine**: A compromised developer machine is one of the most realistic secret-theft scenarios. Developers often have source code, `.env` files, SSH keys, cloud CLI sessions, package registry tokens, browser sessions, and Docker credentials on the same laptop.
+- **Leaked image**: A leaked image can be as dangerous as a leaked repository, sometimes more dangerous. Images may contain compiled code, configuration, package manager caches, private dependency URLs, build metadata, and accidentally copied secrets.
+- **Exposed Docker socket**: The Docker socket is one of the most important Docker security lessons. Mounting `/var/run/docker.sock` into a container often gives that container control over the Docker daemon. OWASP states that giving access to the Docker socket is equivalent to giving unrestricted root access to the host.
+- **CI/CD compromise**: CI/CD systems are high-value targets because they often hold deployment credentials, registry tokens, package publishing keys, cloud credentials, signing keys, and environment secrets. A compromised pipeline can steal secrets even if the application code is clean.
+- **Logs and observability leaks**: Logs are a common secret graveyard. Applications log full URLs with credentials, database connection strings, authorization headers, webhook payloads, stack traces, environment dumps, and debug configuration.
+- **Runtime shell access**: Runtime shell access means an attacker, operator, or overly curious user can execute commands inside a running container. Once inside, they may inspect environment variables, mounted secret files, application configuration, process arguments, writable volumes, logs, and network access.
+- **Backups and volume leakage**: Backups and volumes are often forgotten in secret threat models. Docker volumes may contain database files, uploaded files, TLS material, application config, cached tokens, or generated credentials. Backups may preserve old secrets long after rotation.
+
+## How secrets leak in Docker projects
+
+### Secrets in source code
+Secrets in source code are the classic leak, but the Docker-specific angle is that source code often becomes part of the build context. If a developer writes an API key directly into app.py, settings.js, or config.go, that value may be copied into the image, stored in Git history, cached by CI, indexed by code search, and eventually distributed through a container registry. The exploit path is practical: an attacker does not need shell access to production; they only need access to the repository, a leaked image, or old build artifacts. Even after removing the secret from the current file, it may still exist in Git history and old images.
+
+Example:
+```bash
+cd ./examples/01_secrets_in_source_code
+
+# Initialize a new Git repository and make a commit with a secret in the source code
+git init
+git add app.py
+git config --global user.email "you@example.com"
+git config --global user.name "Your Name"
+git commit -m "Add app with config"
 
-"what credentials can I steal from here?"
+grep -R "sk_live" .
+git log -p -- app.py
 
-That is why secret management is not an administrative afterthought.
+# Then “fix” the file:
+cat > app.py <<'PY'
+import os
+PAYMENT_API_KEY = os.environ.get("PAYMENT_API_KEY")
+print("App started")
+PY
 
-It is a core part of container security.
+cat app.py
 
-If web exploitation is the entry point and hardening limits behavior, secrets management decides how much authority is sitting nearby once the attacker lands.
+# App file looks good, but the secret is still in Git history:
+git add app.py
+git commit -m "Move key to env"
+git log -p -- app.py
 
-## Where This Fits In Part 04
+# remove the git history to fully remove the secret from the repository
+rm -rf .git
+```
 
-This lecture follows hardening for a reason.
+The current file is clean, but the previous commit still contains the fake key. This shows why remediation usually means rotate or revoke the secret, not just delete it from code.
 
-The progression is:
+### Secrets in `.env` files committed to Git
 
-1. web apps get compromised
-2. runtime controls limit what the attacker can do
-3. good secret handling limits what the attacker can steal
-4. observability helps you notice and respond
+`.env` files are dangerous because they feel informal. Developers use them for local convenience, but Docker Compose automatically integrates heavily with environment-based configuration, so `.env` often becomes the place where real credentials accumulate. [Docker’s Compose documentation](https://docs.docker.com/compose/how-tos/environment-variables/best-practices/) explicitly recommends being careful with sensitive data in environment variables and considering Docker secrets for sensitive values.
 
-This module covers step 3.
+Example:
+```bash
+cd ./examples/02_secrets_in_env_files
 
-## Learning Objectives
+cat .env
 
-By the end of this lecture, participants should be able to:
+cat > .gitignore <<'EOF'
+.env
+*.secret
+secrets/
+EOF
 
-- identify the main ways secrets leak in containerized systems
-- explain why environment variables, image layers, logs, and CI systems are common secret-exposure paths
-- describe better patterns for build-time and runtime secret handling
-- explain the roles of Docker secrets, Compose secrets, Kubernetes Secrets, and external secret managers
-- apply practical best practices around scope, rotation, TTL, auditability, and revocation
+cat > .env.example <<'EOF'
+POSTGRES_PASSWORD=
+STRIPE_SECRET_KEY=
+JWT_SIGNING_KEY=
+EOF
+```
+A `.env.example` tells developers what variables exist without encouraging them to share real values. In many teams, `.env.example` becomes part of onboarding and CI validation.
 
-## Suggested Timing
+### Secrets in `docker-compose.yml`
 
-This module works well as a 55-60 minute lecture:
+Putting secrets directly into `docker-compose.yml` is worse than putting them in a local `.env` file because Compose files are almost always committed, reviewed, copied, reused, and shared. A password in Compose also becomes part of the deployment definition, which means it may be visible to anyone who can read infrastructure configuration. [Docker Compose supports](https://docs.docker.com/compose/how-tos/use-secrets/) secrets and mounts them into containers as files, typically under `/run/secrets/<secret_name>`, only for services that explicitly request them.
 
-| Time | Topic |
-| --- | --- |
-| 0-10 min | Why secrets are the post-exploitation prize |
-| 10-22 min | Where secrets leak in containerized systems |
-| 22-38 min | Better patterns for build-time and runtime secret delivery |
-| 38-48 min | Platform options: Docker, Compose, Kubernetes, external stores |
-| 48-60 min | Rotation, revocation, and best-practice baseline |
+Example:
+```bash
+cd ./examples/03_secrets_in_compose
 
-## What Counts As A Secret Here
+cat docker-compose.yml
+grep -n "PASSWORD" docker-compose.yml
 
-Participants should think broadly.
+# Create a secrets directory
+mkdir -p secrets
+printf "FAKE_compose_password_123\n" > secrets/postgres_password.txt
 
-In containerized environments, secrets include:
+cat > docker-compose.yml <<'YAML'
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
 
-- database passwords
-- API tokens
-- OAuth client secrets
-- TLS private keys
-- SSH keys
-- cloud credentials
-- registry credentials
-- service account tokens
-- signing keys
-- webhook secrets
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+YAML
 
-The danger is not only disclosure.
+cat docker-compose.yml
+```
 
-It is what those secrets allow next.
+The secret file still exists on the host. The host, developer machine, backup system, and filesystem permissions still matter.
 
-## Why Secrets Matter So Much After Compromise
+### Secrets in Dockerfile `ENV`
 
-A compromised web container may not have host root.
+Dockerfile `ENV` is a common beginner mistake because it “works.” The container starts, the application sees the variable, and everything looks fine. The problem is that `ENV` becomes part of the image metadata and is inherited by containers created from the image. [Docker’s build check documentation](https://docs.docker.com/reference/build-checks/secrets-used-in-arg-or-env/) says sensitive data should not be used in `ENV` because it persists in the final image.
 
-It may not need it.
+![Dockerfile ENV leak](./images/secrets_in_compose.png)
 
-If it has:
+Example:
+```bash
+cd ./examples/04_secrets_in_dockerfile
 
-- database credentials
-- object storage credentials
-- internal API tokens
-- CI tokens
-- cloud keys
+cat Dockerfile
 
-then the attacker can often leave the container boundary behind very quickly.
+sudo docker build -t env-leak-demo .
+sudo docker inspect env-leak-demo | grep -A3 API_TOKEN
 
-This is why secret exposure is usually an impact multiplier.
+# You can also start a container and inspect the environment:
+sudo docker run --name env-leak-container -d env-leak-demo
+sudo docker inspect env-leak-container | grep -A3 API_TOKEN
+sudo docker rm -f env-leak-container
+```
 
-## The Main Secret Leak Paths In Containerized Systems
+Even if the application never prints the token, Docker metadata may still reveal it. This is why “we do not log the secret” is not enough if the Dockerfile itself stores the secret.
 
-## 1. Secrets Baked Into Images
+### Secrets in Dockerfile `ARG`
 
-This is one of the worst and most common mistakes.
 
-Examples:
+https://chatgpt.com/c/6a018720-14d8-8332-940c-19e939032fdf
 
-- passwords copied into the image during build
-- `.env` files added to the image
-- private keys copied into layers
-- secrets passed via `ARG` or `ENV` in a way that leaves build traces
+### Secrets in image layers
 
-Why it is bad:
+### Secrets in `docker history`
 
-- images are copied, cached, scanned, backed up, and shared
-- a leaked image can leak the secret repeatedly
-- old layers can preserve data even after later changes
+### Secrets in build cache
 
-If a secret ever becomes part of the image artifact, the damage is usually much larger than one running container.
+### Secrets in logs
 
-## 2. Secrets Passed As Environment Variables
+### Secrets in crash dumps
 
-Environment variables are convenient.
+### Secrets in shell history
 
-They are also easy to overuse.
+### Secrets in CI/CD job output
 
-Risks:
+### Secrets in Docker inspection output
 
-- they can appear in process inspection
-- they can leak into crash dumps or debugging output
-- they can be echoed accidentally in logs
-- they often get copied between environments carelessly
+### Secrets in mounted volumes
 
-This does not mean environment variables are always forbidden.
+### Secrets in container process environments
 
-It means they should not be treated as a magically secure secret transport.
+### Secrets via `/var/run/docker.sock`
 
-## 3. Secrets In Source Repositories Or Compose Files
+## Environment variables, .env, and configuration boundaries
+Participants understand when environment variables are acceptable and when they are not.
 
-This sounds basic, but it still happens constantly.
+Topics
 
-Examples:
+Twelve-factor configuration versus secret handling
+.env files in Docker Compose
+env_file
+environment
+shell variables
+Dockerfile ENV
+Dockerfile ARG
+precedence and override behavior
+separating config from secrets
+local developer convenience versus production safety
+.env.example patterns
+Git hygiene:
+.gitignore
+.dockerignore
+pre-commit hooks
+example files without values
+Safe naming conventions:
+DB_HOST versus DB_PASSWORD
+POSTGRES_PASSWORD_FILE style conventions
+Why “base64 encoded” is not encrypted
 
-- `docker-compose.yml` contains plaintext passwords
-- `.env` files are committed to Git
-- secret manifests are shared because they are "just base64"
+Docker’s Compose documentation says to be cautious with sensitive data in environment variables and to consider Docker secrets for sensitive information; it also calls out environment-variable precedence as something teams need to understand.
 
-Kubernetes documents this very clearly:
+## Docker Compose secrets
+
+Participants learn practical Docker Compose secret injection without Kubernetes.
+
+Topics
+
+Compose secrets: top-level element
+Service-level secrets: access
+File-backed secrets
+Environment-backed secrets
+/run/secrets/<secret_name>
+Per-service access control
+File permissions
+Secret naming conventions
+Avoiding broad sharing across services
+_FILE environment variable convention used by many official images
+Development versus production Compose files
+compose.override.yml
+Multiple secret files for different environments
+What Compose secrets do and do not protect against
+Difference between Docker Compose secrets and a full external secrets manager
+
+Docker Compose mounts secrets as files under /run/secrets/<secret_name> and grants access only to services that explicitly reference those secrets.
+
+## Build-time secrets with Docker BuildKit
+
+Participants learn how to safely use credentials during image builds without baking them into images.
+
+Topics
+
+Difference between build-time and runtime secrets
+Why ARG and ENV are unsafe for build secrets
+BuildKit overview
+docker build --secret
+Dockerfile RUN --mount=type=secret
+Secret source from file
+Secret source from environment variable
+Custom target paths
+SSH mounts for private Git repositories
+Private package registries:
+npm
+pip
+Maven
+NuGet
+private apt repositories
+Build cache considerations
+Multi-stage builds and secret boundaries
+Verifying that secrets are not present in final image layers
+
+Docker’s Build secrets documentation states that build arguments and environment variables are inappropriate for build secrets because they persist in the final image, and recommends secret mounts or SSH mounts instead.
+
+## Runtime secret consumption patterns
+
+Learning objectives
+
+Participants learn how applications should read and use secrets once injected.
+
+Topics
+
+Read-on-startup model
+Read-on-demand model
+File watcher model
+Reload without restart
+Secret caching
+In-memory handling
+Avoiding secret logging
+Avoiding secret exposure in exception messages
+Masking secrets in structured logs
+Redacting secrets from health checks
+Avoiding secrets in command-line arguments
+Avoiding secrets in URLs
+File permissions and user IDs
+Running as non-root
+Read-only filesystem patterns
+Limiting container capabilities
+no-new-privileges
+avoiding Docker socket mounts
+
+OWASP recommends minimizing the time window where secrets exist in plaintext memory, while also noting that the right level of memory protection depends on the threat model and practicality.
+
+## Secret storage options outside Kubernetes
+
+Participants learn the main non-Kubernetes options for storing and distributing secrets.
+
+Topics
+
+Local file-backed secrets
+Docker Compose secrets
+Docker Swarm secrets, conceptually
+SOPS-encrypted files
+Mozilla SOPS with age or GPG
+HashiCorp Vault
+AWS Secrets Manager
+Azure Key Vault
+Google Secret Manager
+1Password CLI / Doppler / Infisical style developer workflows
+CI/CD secret stores
+Host-level secret injection
+Pull-at-startup pattern
+Sidecar-like pattern without Kubernetes
+Short-lived credentials
+Dynamic database credentials
+Trade-offs:
+simplicity
+auditability
+rotation
+offline development
+blast radius
+vendor lock-in
+developer experience
+
+OWASP recommends centralized secrets management, fine-grained access control, key rotation, and comprehensive auditing/monitoring across environments.
+
+## CI/CD, scanning, and supply-chain controls
+Participants learn how secrets interact with image builds, registries, pipelines, and scanners.
+
+Topics
+
+CI/CD secret injection
+Masked variables
+Protected variables
+Branch and environment scoping
+Pull request risks
+Forked pipeline risks
+Secrets in build logs
+Secrets in test output
+Secrets in artifacts
+Secrets in Docker layer cache
+Image registry access
+SBOM and provenance basics
+Secret scanning:
+pre-commit scanning
+repository scanning
+CI scanning
+container image scanning
+Policy gates:
+fail builds on detected secrets
+fail builds on root containers
+fail builds on unsafe Dockerfile patterns
+Separation of duties:
+developers can deploy without reading raw production secrets
+CI can access deployment secrets only in protected contexts
+
+NIST SP 800-190 describes application containers as portable, reusable, automatable packages and provides security recommendations for container technologies, making it a useful baseline reference for container security training.
+
+## Rotation, revocation, auditing, and incident response
+
+Participants move beyond “where do I put secrets?” into operational readiness.
+
+Topics
+
+Static versus dynamic secrets
+Rotation triggers:
+scheduled rotation
+staff departure
+suspected leak
+confirmed leak
+dependency compromise
+environment compromise
+Rotation strategies:
+immediate rotation
+dual-read / single-write
+versioned credentials
+blue-green secret rollout
+application restart strategy
+Revocation
+Expiration
+Audit logs
+Access reviews
+Least privilege
+Break-glass access
+Incident response checklist
+Secret leak severity classification
+Post-incident remediation
+
+OWASP recommends regular rotation so stolen credentials are useful for a shorter time, while also noting that lifetimes vary depending on the type and purpose of the secret.
+
+## Example: Harden a real Docker Compose app
+Exercise
+
+Participants review a sample application and classify each value as:
+
+Secret
+Sensitive but not a secret
+Configuration
+Public metadata
+Unknown / requires policy decision
+
+
+Hands-on lab
+
+“Find the leaks” lab:
+
+Inspect a vulnerable Docker project.
+Search Git history for secrets.
+Inspect image history.
+Inspect runtime environment.
+Review Compose files.
+Review container logs.
+Produce a short risk report.
+
+Hands-on lab
+
+Refactor a Compose app that currently uses:
+
+environment:
+  DB_PASSWORD: supersecret
 
-base64 is not encryption.
+into a safer design using:
 
-This is an important point to say out loud in class.
+.env.example
+local-only ignored .env
+Compose secrets for sensitive values
+clear config/secret separation
+
+Hands-on lab
+
+Build a three-service application:
+
+web
+worker
+db
+
+Tasks:
+
+Create separate secrets for database password, API token, and admin bootstrap password.
+Grant each service only the secrets it needs.
+Modify application code to read from /run/secrets.
+Use _FILE style environment variables for images that support them.
+Verify secrets are not present in the Compose file or image history.
+
+Participants build an image that needs a private package token.
 
-## 4. Secrets Exposed In CI/CD
+Bad version:
+
+ARG NPM_TOKEN
+RUN npm config set //registry.npmjs.org/:_authToken=$NPM_TOKEN
+
+Secure version:
+
+RUN --mount=type=secret,id=npm_token \
+    NPM_TOKEN="$(cat /run/secrets/npm_token)" && \
+    npm config set //registry.npmjs.org/:_authToken="$NPM_TOKEN" && \
+    npm ci
+
+Participants then inspect:
+
+image history
+final filesystem
+build logs
+cache behavior
+
+
+Hands-on lab
+
+Modify a small Python/Node/Go service to:
 
-CI systems are one of the most dangerous secret concentration points.
+Read secrets from files.
+Avoid printing secret values in logs.
+Redact secrets in error output.
+Fail safely if a secret is missing.
+Support a restart-based rotation workflow.
 
-Why:
+Participants compare four designs for the same Docker Compose app:
 
-- they often hold registry tokens
-- build-time credentials may be present
-- deployment credentials may be present
-- third-party actions and plugins may run in the same workflow
+Plain .env
+Compose secrets from local files
+Encrypted secrets in Git using SOPS
+Runtime fetch from an external secret manager
 
-A compromised CI helper can become a secret-exfiltration event long before production is touched directly.
+They score each design against:
 
-## 5. Secrets Left In Logs
+developer usability
+production safety
+auditability
+rotation support
+failure modes
+operational complexity
 
-This happens through:
+Create a CI workflow that:
 
-- debug output
-- stack traces
-- bad error handling
-- accidental request logging
-- copying full environment maps into diagnostics
+Builds a Docker image with BuildKit secrets.
+Runs a secret scan.
+Verifies no secret is present in the final image.
+Publishes only if checks pass.
+Uses environment-scoped secrets.
 
-Secret management fails if the application protects a password carefully and then prints it during an exception.
+A production database password was committed to Git and used in a Docker Compose deployment.
 
-## 6. Over-Broad Mounted Secrets
+Participants must decide:
 
-Another common problem:
+Is this an incident?
+What systems are affected?
+What needs to be rotated?
+What logs must be checked?
+What containers must be restarted?
+What evidence should be preserved?
+What long-term controls should be added?
 
-- every container in a pod or Compose project gets the same secret
-- a support sidecar gets access it does not need
-- a utility container gets broad file mounts "for convenience"
+Capstone: harden a Docker Compose application
 
-The rule here is very simple:
+Learning objectives
 
-if the process does not need the secret, it should not see the secret.
+Participants apply the whole course to a realistic project.
 
-## Build-Time Secrets Versus Runtime Secrets
+Scenario
 
-This distinction matters a lot.
+A small company has a Docker Compose app with:
 
-## Build-Time Secrets
+web service
+background worker
+PostgreSQL
+Redis
+private package dependency
+third-party API token
+CI pipeline
+staging and production environments
 
-These are secrets needed while building an image.
+The current project contains secrets in:
 
-Examples:
+.env
+docker-compose.yml
+Dockerfile ARG
+CI logs
+image history
+app logs
 
-- private package repository token
-- Git credential for fetching private code
-- SSH key for dependency download
+Capstone tasks
 
-The key rule:
+Participants must:
 
-**build-time secrets must not become part of the final image**
+Create a secret inventory.
+Remove hardcoded secrets.
+Refactor runtime secrets into Docker Compose secrets.
+Refactor build credentials into BuildKit secrets.
+Add .env.example.
+Add .gitignore and .dockerignore controls.
+Add secret scanning.
+Add CI/CD masking and protected variables.
+Write a rotation runbook.
+Write a short team policy.
 
-Docker Build supports secret and SSH mounts specifically for this reason.
+Final deliverables
 
-## Runtime Secrets
+Hardened docker-compose.yml
+Hardened Dockerfile
+Secret inventory
+Rotation runbook
+CI/CD pipeline snippet
+Risk assessment
+Short presentation explaining trade-offs
 
-These are secrets needed by the running workload.
 
-Examples:
 
-- database credentials
-- API keys
-- TLS keys
-- service-to-service tokens
 
-The key rule:
 
-**runtime secrets should be delivered as late as possible, with the smallest scope possible, for the shortest lifetime possible**
 
-## Better Build-Time Secret Handling
 
-The modern Docker answer is BuildKit secret mounts.
 
-This is the correct direction when builds need sensitive data temporarily.
-
-Why it is better:
-
-- the secret is made available to the build step without becoming a normal image layer
-- it avoids common anti-patterns such as copying SSH keys or tokens into the image
-
-The teaching point is not just "use this Docker feature."
-
-It is:
-
-"the build pipeline needs a separate secret-handling model from the runtime environment."
-
-## Better Runtime Secret Handling
-
-At runtime, good patterns usually include one of these:
-
-- platform-managed secret mounts
-- explicitly scoped secret files
-- short-lived tokens from an external secret manager
-- per-service credentials instead of shared global credentials
-
-The worst pattern is:
-
-one giant `.env` file full of long-lived production secrets reused everywhere.
-
-## Docker And Compose Secrets
-
-Docker and Compose both have secret concepts.
-
-The important operational idea is that services should only get access to secrets they are explicitly granted.
-
-In Compose, secrets are declared top-level and then granted per service.
-
-This makes the access model much clearer than shoving everything into environment variables.
-
-A simple mental model for students:
-
-- configs are for configuration
-- secrets are for sensitive configuration
-- secret access should be explicit and minimal
-
-## Kubernetes Secrets
-
-Kubernetes Secrets are widely used, but they need careful teaching because many people misunderstand them.
-
-Kubernetes documents several key facts:
-
-- Secrets are meant for confidential data
-- by default they are stored unencrypted in etcd unless encryption at rest is configured
-- anyone who can create a pod in a namespace may be able to expose secrets from that namespace
-- broad `list` or `watch` access to Secrets is especially dangerous
-
-This is a very important reality check.
-
-Kubernetes Secrets are useful.
-
-They are not automatically a full secrets-management solution by themselves.
-
-## External Secret Stores
-
-Kubernetes explicitly points to the option of external secret stores and CSI-based integrations.
-
-This matters because external stores can provide things such as:
-
-- stronger centralization
-- better auditability
-- rotation workflows
-- short-lived credentials
-- separation of duties
-
-Tools such as Vault go even further by offering dynamic secrets.
-
-That is often a far better answer than long-lived shared passwords.
-
-## Dynamic Secrets
-
-Dynamic secrets are one of the best concepts to teach in this module.
-
-Instead of storing a long-lived credential and hoping nobody leaks it, the platform issues:
-
-- just-in-time credentials
-- with limited scope
-- with a TTL
-- with revocation
-
-This is powerful because stolen credentials expire and can be uniquely tied to a workload or request path.
-
-That is a huge improvement over:
-
-- shared database users
-- static cloud keys
-- forever-valid API tokens
-
-## Practical Example 1: Private Dependency Download During Build
-
-Bad pattern:
-
-- copy an SSH key into the image
-- run the dependency fetch
-- delete the key later
-
-Why this is still bad:
-
-- the key may remain in image history or intermediate layers
-
-Better pattern:
-
-- use BuildKit secret or SSH mounts so the build can access the credential without baking it into the final artifact
-
-## Practical Example 2: Database Password In Environment Variables
-
-Bad pattern:
-
-- same `DB_PASSWORD` used in every environment
-- copied across local `.env` files, CI, and production
-
-Better pattern:
-
-- per-environment and ideally per-service credential
-- injected at runtime only
-- mounted or fetched through a platform mechanism
-- rotated when staff or trust boundaries change
-
-## Practical Example 3: Kubernetes Secret In Git
-
-Bad pattern:
-
-- store a base64-encoded Secret manifest in source control and treat it as protected because it is "not plain text"
-
-Why it is bad:
-
-- base64 is trivial to decode
-- Git history makes removal painful
-- repo access becomes secret access
-
-Better pattern:
-
-- keep the secret outside Git
-- inject it at deploy time or sync it from an external store
-- limit which workloads can reference it
-
-## Practical Example 4: Shared Production API Key
-
-Bad pattern:
-
-- five services all use the same API key
-
-Impact:
-
-- one compromise affects all services
-- audit attribution is poor
-- rotation becomes painful
-
-Better pattern:
-
-- one identity per service
-- ideally one credential per environment and service
-- short TTL where supported
-
-## Rotation, Revocation, And Expiry
-
-This is where many teams fail.
-
-They focus on secret storage but not secret lifecycle.
-
-A mature secrets program needs:
-
-- rotation
-- revocation
-- inventory
-- ownership
-- expiry expectations
-- incident response playbooks
-
-Good questions to ask:
-
-- who owns this credential?
-- where is it used?
-- how fast can we rotate it?
-- what breaks when we revoke it?
-
-If nobody knows, the environment is fragile.
 
 ## A Practical Best-Practice Baseline
 
@@ -411,26 +597,6 @@ If nobody knows, the environment is fragile.
 9. Do not log secret values or full environment maps.
 10. In Kubernetes, enable encryption at rest and least-privilege RBAC for Secrets.
 
-## Good Discussion Prompts
-
-- Which of our current secrets would be easiest to steal from a compromised container?
-- Are we using environment variables because they are secure, or because they are easy?
-- Which secrets are shared across too many services or environments?
-- How fast could we rotate our database or API credentials after an incident?
-- Which secrets today are still living in Git, CI variables, or plaintext config files?
-
-## Bridge To The Next Module
-
-Hardening and secrets management help reduce impact.
-
-But we still need to answer:
-
-- how do we notice attacks quickly?
-- how do we tell normal traffic from abuse?
-- how do we investigate what happened inside a container stack?
-
-That is the job of monitoring and observability.
-
 ## Key Takeaways
 
 - Secrets are one of the highest-value post-exploitation targets in any containerized environment.
@@ -438,15 +604,3 @@ That is the job of monitoring and observability.
 - Build-time and runtime secret handling are different problems and need different controls.
 - Kubernetes Secrets are useful, but not magically secure by default.
 - Short-lived, scoped, and revocable credentials are far safer than long-lived shared secrets.
-
-## References
-
-- Docker Build secrets: <https://docs.docker.com/build/building/secrets/>
-- Docker Compose secrets how-to: <https://docs.docker.com/compose/how-tos/use-secrets/>
-- Docker Compose secrets reference: <https://docs.docker.com/reference/compose-file/secrets/>
-- Docker Swarm secrets: <https://docs.docker.com/engine/swarm/secrets/>
-- Kubernetes Secrets: <https://kubernetes.io/docs/concepts/configuration/secret/>
-- Good practices for Kubernetes Secrets: <https://kubernetes.io/docs/concepts/security/secrets-good-practices/>
-- Kubernetes RBAC good practices: <https://kubernetes.io/docs/concepts/security/rbac-good-practices/>
-- Vault, understand static and dynamic secrets: <https://developer.hashicorp.com/vault/tutorials/get-started/understand-static-dynamic-secrets>
-- Vault database dynamic secrets: <https://developer.hashicorp.com/vault/tutorials/db-credentials/database-secrets>
