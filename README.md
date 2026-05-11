@@ -56,7 +56,17 @@ A practical orientated course on containerized infrastructure and workload secur
         - Rotation, revocation, auditing, and incident response
         - Example: Harden a real Docker Compose app
     - **Container Monitoring and Observability**
-    - **Practical examples of end-to-end exploitation, hardening and observability**
+        - Observability concepts for Docker security
+        - Native Docker monitoring and troubleshooting
+        - Container health checks and service readiness
+        - Prometheus, cAdvisor, and Docker metrics
+        - Grafana dashboards for operations and security
+        - Centralized container logging
+        - OpenTelemetry and traces
+        - Alerting and detection engineering
+        - Docker events, daemon logs, and incident timelines
+        - Runtime detection with Falco
+        - Compliance, audit evidence, and CIS Docker Benchmark
 
 5. [**Defend The Flag**](./05_Defend_The_Flag/README.md)
     - **Defend The Flag challenge for securing the containers. Applying the lessons learnt in practice.**

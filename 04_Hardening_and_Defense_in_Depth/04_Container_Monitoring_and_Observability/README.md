@@ -1,355 +1,237 @@
 # Container Monitoring And Observability
 
-Hardening helps reduce impact.
-
-Secrets management helps reduce what can be stolen.
-
-But neither helps much if defenders cannot answer basic questions during an incident:
-
-- what is happening right now?
-- which service is failing or being abused?
-- when did it start?
-- what changed just before it happened?
-- where did the request go next?
-
-That is why monitoring and observability matter.
-
-This module is about giving defenders enough telemetry to see both reliability problems and security problems in containerized environments.
-
-## Where This Fits In Part 04
-
-This is the closing lecture in the defense-in-depth section.
-
-The red line across Part 04 is:
-
-1. web apps are attacked first
-2. hardening limits the blast radius
-3. secret management limits the value of compromise
-4. observability lets us detect, investigate, and respond
-
-This module covers step 4.
-
-## Learning Objectives
-
-By the end of this lecture, participants should be able to:
-
-- explain the difference between basic monitoring and true observability
-- identify the most important telemetry signals for containerized workloads
-- design a practical telemetry stack for a small production Docker environment
-- explain how logs, metrics, traces, events, and runtime detections fit together
-- avoid common observability mistakes such as secret leakage in logs, cardinality explosions, and missing deployment context
-
-## Suggested Timing
-
-This module works well as a 55-60 minute lecture:
-
-| Time | Topic |
-| --- | --- |
-| 0-10 min | Monitoring versus observability |
-| 10-22 min | The telemetry signals that matter |
-| 22-38 min | Practical container observability architecture |
-| 38-50 min | Security-relevant use cases and incident response |
-| 50-60 min | Best practices and common mistakes |
-
-## Monitoring Versus Observability
-
-Participants often use these terms interchangeably.
-
-They are related, but not identical.
-
-Monitoring asks:
-
-- is the service up?
-- is CPU high?
-- are error rates spiking?
-
-Observability asks:
-
-- why is the service failing?
-- which request path is causing the issue?
-- which deployment introduced the regression?
-- which container, node, process, or user action explains what we are seeing?
-
-Good monitoring is necessary.
-
-Good observability is what makes a complex containerized environment explainable.
-
-## The Telemetry Signals That Matter
-
-For this course, teach five main signal types:
-
-1. metrics
-2. logs
-3. traces
-4. events
-5. runtime security signals
-
-Together, they let defenders move from symptoms to causes.
-
-## 1. Metrics
-
-Metrics are numeric measurements over time.
-
-For containerized services, the most useful metrics usually include:
-
-- request rate
-- error rate
-- latency
-- saturation
-- container CPU
-- memory usage
-- restart count
-- network throughput
-- queue depth
-- DB or cache health metrics
-
-These are what help you notice:
-
-- a crash loop
-- a resource exhaustion attack
-- a slow downstream dependency
-- an abuse spike
-
-## 2. Logs
-
-Logs give detail and context.
-
-For production containers, logs should normally go to `stdout` and `stderr` so the platform can collect them cleanly.
-
-Useful log sources:
-
-- application logs
-- reverse proxy logs
-- authentication logs
-- database logs where appropriate
-- container runtime logs
-- security-tool alerts
-
-Structured logs are much easier to search, correlate, and alert on than ad hoc text strings.
-
-## 3. Traces
-
-Traces show how a single request moves through the system.
-
-This is extremely valuable in modern stacks because a user request often touches:
-
-- reverse proxy
-- frontend
-- backend API
-- database
-- cache
-- external API
-
-Without tracing, teams often argue about where the problem is.
-
-With tracing, they can follow the request path directly.
-
-Security value:
-
-- traces help show suspicious request patterns
-- they make lateral effects of one request easier to follow
-- they expose where a malicious request triggered expensive or unusual downstream behavior
-
-## 4. Events
-
-Events are state changes.
-
-Examples:
-
-- container started
-- container exited
-- healthcheck failed
-- image changed
-- deployment restarted
-- secret rotated
-- daemon event triggered
-
-Events matter because many incidents are really "bad change plus bad traffic."
-
-If you cannot correlate the traffic spike with the deployment or restart that preceded it, investigations get slower and noisier.
-
-## 5. Runtime Security Signals
-
-Traditional observability focuses on performance and correctness.
-
-Security-focused observability adds:
-
-- suspicious process execution
-- unexpected file access
-- privilege escalation attempts
-- unusual outbound connections
-- shell spawned in web container
-- read access to sensitive files
-
-This is where tools like Falco become relevant.
-
-Falco is not your whole observability stack.
-
-But it is a valuable runtime signal source for defenders.
-
-## What To Observe In A Containerized Application Stack
-
-For a typical single-node stack, a good baseline includes:
-
-## Application Layer
-
-- request latency
-- request rate
-- 4xx and 5xx rates
-- authentication failures
-- slow queries
-- business-critical failures
-
-## Container Layer
-
-- CPU
-- memory
-- disk usage where relevant
-- restart count
-- health status
-- exit reasons
-
-## Host Layer
-
-- CPU pressure
-- memory pressure
-- filesystem capacity
-- network errors
-- packet drops
-- daemon health
-
-## Change Layer
-
-- new image deployed
-- config changed
-- secret rotated
-- compose or stack restart
-
-## Security Layer
-
-- suspicious execs
-- outbound connection anomalies
-- access to `/run/secrets` or sensitive paths
-- repeated authentication failures
-- unusual admin API access
-
-## A Practical Single-Node Observability Pattern
-
-For the kind of Docker-based environment used in this course, a realistic pattern is:
-
-```text
-application instrumentation
--> OpenTelemetry SDK / auto-instrumentation
--> collector or agent
--> metrics backend + logs backend + traces backend
--> dashboards + alerting
-```
-
-A very teachable open stack is:
-
-- Prometheus for metrics
-- cAdvisor for container metrics
-- node_exporter for host metrics
-- Loki for logs
-- Grafana for dashboards
-- OpenTelemetry for instrumentation and trace/metric/log export pipelines
-- Alertmanager for alerts
-- Falco for runtime security detections
-
-That is more than enough for a serious single-node teaching environment.
-
-## Why OpenTelemetry Matters
-
-OpenTelemetry is important because it gives a vendor-neutral way to generate, collect, and export telemetry.
-
-That matters for teaching because participants should not leave thinking observability equals one vendor product.
-
-What matters is the model:
-
-- instrument the application
-- collect the telemetry
-- process it
-- export it to the backend of choice
-
-The OpenTelemetry Collector is especially useful as a control point because it can receive, process, and forward telemetry centrally.
-
-## Why Prometheus Still Matters
-
-Prometheus remains one of the most important metrics tools in cloud-native environments because it gives you:
-
-- time-series storage
-- scraping model
-- labels for dimensional analysis
-- alerting integration
-
-It is a very practical choice for:
-
-- container resource metrics
-- application metrics
-- host metrics
-- availability checks
-
-## Why Logs Still Need Design
-
-Many teams think:
-
-"we have logs, so observability is covered."
-
-Usually what they really have is:
-
-- unstructured text
-- inconsistent timestamps
-- too much noise
-- too little context
-- secrets accidentally printed in debug output
-
-Log best practices for containers:
-
-- write to `stdout` and `stderr`
-- use structured logs where practical
-- include request IDs or trace IDs
-- avoid logging secrets, tokens, and full credentials
-- define retention and rotation
-
-Docker's logging docs also make an operational point worth teaching:
-
-the `local` logging driver is optimized for performance and disk usage, and its defaults include rotation and compression behavior.
-
-Log handling is both an observability concern and a disk-exhaustion concern.
-
-## Why cAdvisor And Host Metrics Matter
-
-If the app is slow, the root cause might be:
-
-- application code
-- the database
-- the host under memory pressure
-- another noisy container
-
-cAdvisor helps with container-level resource visibility.
-
-Host exporters help with node-level context.
-
-Without both, teams often blame the wrong layer.
-
-## Health Checks Matter Too
-
-Health checks are not full observability.
-
-But they are useful signals.
-
-A healthcheck should help answer:
-
-- is the container alive?
-- is the service ready to serve traffic?
-
-That matters for:
-
-- orchestration decisions
-- restart behavior
-- alerting context
-
-Do not confuse "the process is running" with "the service is healthy."
+While hardening limits the blast radius and secrets management secures the keys to the infrastructure, neither can thwart a sophisticated threat if defenders are blind to the activity within their cluster. Effective security requires the ability to answer critical questions during an incident: what is happening right now, which services are being abused, and where did the malicious traffic flow? This module explores monitoring and observability not just as tools for uptime, but as essential security telemetry. By establishing deep visibility into containerized environments, you empower defenders to detect the subtle shifts in behavior that distinguish a routine reliability issue from a targeted breach.
+
+
+## Observability concepts for Docker security
+Topics
+Monitoring vs observability vs logging vs detection
+Why containers make visibility harder:
+Short-lived processes
+Dynamic names and IDs
+Ephemeral filesystems
+NAT and bridge networking
+Shared host kernel
+Volume mounts
+Side effects of restart policies
+Operational incidents vs security incidents
+What defenders need to answer:
+What changed?
+Which container caused the spike?
+Which image was running?
+Was there unusual process, network, or file activity?
+Did the container restart?
+Did logs survive?
+Can we reconstruct the timeline?
+
+## Native Docker monitoring and troubleshooting
+docker ps
+docker inspect
+docker stats
+docker top
+docker logs
+docker events
+docker system df
+Docker daemon logs
+Container lifecycle states:
+Created
+Running
+Paused
+Restarting
+Exited
+Dead
+Healthy/unhealthy
+Resource limits and what happens when containers exceed them
+CPU throttling, memory limits, OOM kills, blocked I/O
+PID counts and fork-bomb style behavior
+
+## Container health checks and service readiness
+Difference between:
+Process running
+Port open
+Application healthy
+Dependency ready
+Service usable
+Dockerfile HEALTHCHECK
+Compose healthcheck
+Health check intervals, timeouts, retries, and start periods
+Common mistakes:
+Health check only verifies that a process exists
+Health check depends on external services
+Health check is too expensive
+Health check leaks credentials
+Health check hides partial failure
+Readiness patterns in Docker Compose
+Using depends_on with health conditions
+
+## Prometheus, cAdvisor, and Docker metrics
+What metrics to collect from Docker hosts:
+CPU
+Memory
+Network I/O
+Block I/O
+Filesystem usage
+PID count
+Restart count
+Container count
+Image/container age
+Host saturation
+Docker daemon metrics
+cAdvisor
+Node Exporter
+Application metrics
+Prometheus scrape model
+Labels and cardinality
+Metric naming
+Pull vs push
+Short-lived containers and scrape intervals
+Why Docker daemon metrics, cAdvisor metrics, and application metrics are different
+
+## Grafana dashboards for operations and security
+Dashboard design principles
+Difference between:
+Executive dashboard
+Operations dashboard
+Security dashboard
+Incident dashboard
+Avoiding dashboard overload
+Good panel types:
+Time-series graphs
+Stat panels
+Tables
+Logs panels
+Heatmaps where useful
+Container labels and dashboard variables
+Dashboards by:
+Host
+Compose project
+Service
+Container
+Image
+Environment
+Mapping dashboards to questions:
+Is the service healthy?
+Is the host saturated?
+Which container changed?
+What is consuming resources?
+Did the issue begin after a deployment?
+Is this operational or suspicious?
+
+
+## Centralized container logging
+Container stdout/stderr model
+docker logs
+Log rotation
+Local logging drivers
+Remote logging drivers
+JSON logs
+Structured logs
+Correlation IDs
+Log levels
+Sensitive data in logs
+Log retention
+Log integrity
+Log loss scenarios
+Backpressure from logging systems
+Difference between application logs, Docker daemon logs, and runtime/security logs
+
+## OpenTelemetry and traces
+Why infrastructure metrics are not enough
+Application metrics:
+Request count
+Error count
+Latency
+Queue depth
+Database query duration
+Authentication failures
+Distributed tracing basics
+Trace/span model
+OpenTelemetry Collector
+OTLP
+Receivers, processors, exporters
+Service names and resource attributes
+Correlation between logs, metrics, and traces
+Sampling
+Sensitive data risks in traces
+
+The OpenTelemetry Collector receives traces, metrics, and logs, processes them, and forwards them to one or more observability backends through component pipelines. OpenTelemetry also defines semantic conventions to standardize names and attributes across telemetry data, which helps correlation across services and tools.
+
+## Alerting and detection engineering
+Alerting vs dashboarding
+What makes an alert actionable?
+Symptoms vs causes
+Threshold alerts
+Rate-of-change alerts
+Absence alerts
+Multi-window alerts
+Alert fatigue
+Alert severity
+Routing and escalation
+Runbook links
+Silence and maintenance windows
+Security alert examples:
+New privileged container
+Unexpected container created
+Unhealthy production service
+High outbound traffic
+Container restart storm
+Memory exhaustion
+Suspicious runtime event
+
+Prometheus alerting rules define alert conditions using Prometheus expressions and can use for durations to avoid firing immediately on transient conditions. Prometheus best-practice guidance also recommends keeping alerts simple, alerting on symptoms, and avoiding pages where there is nothing actionable to do.
+
+## Docker events, daemon logs, and incident timelines
+Docker daemon logs
+Docker events stream
+Container lifecycle event timeline
+Image pulls
+Container starts/stops/restarts
+Health status changes
+Network connect/disconnect events
+Volume mount events
+Limitations of native event history
+Forwarding events to a durable backend
+Building an incident timeline
+
+## Runtime detection with Falco
+
+Difference between metrics/logs and runtime security events
+Syscall-based detection
+Suspicious process execution
+Shell spawned in container
+Sensitive file reads
+Writes below system directories
+Package manager execution inside running container
+Privilege escalation indicators
+Container escape indicators
+Docker socket access
+Rule tuning
+False positives
+Sending runtime alerts to log/SIEM backends
+
+## Compliance, audit evidence, and CIS Docker Benchmark
+Why monitoring matters for compliance
+CIS Docker Benchmark overview
+What should be continuously monitored:
+Docker daemon configuration
+Socket exposure
+Insecure registries
+Privileged containers
+Host PID/network namespace usage
+Sensitive bind mounts
+Containers running as root
+Missing resource limits
+Missing health checks
+Logging configuration
+Evidence collection
+Continuous compliance vs point-in-time audit
+Where observability supports audit findings
+
+The CIS Docker Benchmark provides secure configuration guidelines for Docker, and CIS currently lists Docker Benchmark version 1.8.0 among recent available versions.
+
+
+https://chatgpt.com/c/6a01a914-8b78-8325-a964-ba05d341a65a
+---
 
 ## Security-Focused Use Cases
 
