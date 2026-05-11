@@ -36,11 +36,10 @@ Many containerized applications are eventually deployed through orchestrators su
 The goal is not just to memorize a list of bad things. The goal is to build a way of thinking about the entire container threat landscape so that later modules on images, networking, and hardening feel coherent.
 
 
+
 ## The Core Idea
 
-The attack surface of a containerized environment is not one thing.
-
-It is a chain of trust boundaries:
+Containerized environments introduce a different attack surface than traditional servers because the workload, image, runtime, daemon, host, filesystem, network, and development pipeline are tightly connected.
 
 ```text
 Developer -> Source -> CI/CD -> Builder -> Registry -> Host -> Runtime -> Container -> App -> Data
@@ -68,6 +67,56 @@ That is why container security cannot be reduced to:
 - "put it in a container"
 
 Those are useful controls, but they do not describe the whole system.
+
+## A Practical Model for Container Attack Surface
+
+| Surface               | Main question                                          |
+| --------------------- | ------------------------------------------------------ |
+| Application           | What can users or attackers interact with directly?    |
+| Image                 | What is inside the artifact being executed?            |
+| Runtime               | What privileges does the container have while running? |
+| Docker daemon         | Can the attacker control Docker itself?                |
+| Host                  | Can container access affect the host system?           |
+| Network               | What services are reachable from where?                |
+| Storage               | What filesystems or volumes cross boundaries?          |
+| Secrets/config        | What sensitive data is visible at runtime?             |
+| Registry/supply chain | Can the image source be trusted?                       |
+| Developer/CI          | Can the build or deployment process be abused?         |
+
+## Ways to Analyze the Threat Landscape
+
+- Asset-Based View -> What are we trying to protect?
+- Entry-Point View -> Where can an attacker enter?
+- Trust-Boundary View -> Where does data or control cross from one trust zone into another?
+- Attacker Path View -> If one part is compromised, what becomes reachable next?
+
+## Common frameworks
+- STRIDE for Containers
+- MITRE ATT&CK for Containers
+- NIST SP 800-190
+
+## Practical overview of Docker attack surfaces
+- Application Attack Surface
+- Image Attack Surface
+- Container Runtime Attack Surface
+- Docker Daemon and Docker Socket Attack Surface
+- Host Attack Surface
+- Network Attack Surface
+- Storage and Volume Attack Surface
+- Secrets and Configuration Attack Surface
+- Registry and Supply-Chain Attack Surface
+- Developer and CI/CD Attack Surface
+
+## Common Attack Vectors
+
+- Attack Vector 1: Web App Compromise → Container Discovery
+- Attack Vector 2: Web Container → Database Access
+- Attack Vector 3: Mounted Source Code → Tampering
+- Attack Vector 4: Docker Socket Exposure → Control Plane Abuse
+- Attack Vector 5: Privileged Container → Host Boundary Weakening
+- Attack Vector 6: Exposed Admin Interface
+- Attack Vector 7: Malicious or Unexpected Image Source
+- Attack Vector 8: Build Context Leakage
 
 #### Three Common Attacker Outcomes
 

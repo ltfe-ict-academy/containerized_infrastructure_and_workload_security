@@ -16,12 +16,11 @@ A practical orientated course on containerized infrastructure and workload secur
     - **Container Security: Myth vs. Reality**
     - **Attack surface in containerized environments**
         - The Core Idea
-        - Ways To Analyze The Threat Landscape
-        - Common Frameworks
-        - A practical overview of the attack surface
-        - Common Attack Vectors
-        - Practical Demo Examples
-        - Demonstrating container escape vulnerabilities
+        - A practical model for Docker attack surface
+        - Ways to analyze the threat landscape
+        - Common frameworks
+        - Practical overview of Docker attack surfaces
+        - Common attack vectors
     - **What is S-SDLC and how it applies to containers**
     - **The Image Problem: Risks and Vulnerabilities of Container Images**
         - Images Best Practices
