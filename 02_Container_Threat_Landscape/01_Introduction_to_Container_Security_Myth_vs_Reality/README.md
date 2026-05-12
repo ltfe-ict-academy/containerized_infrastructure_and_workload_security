@@ -1,65 +1,15 @@
-# Container Security: Myth vs. Reality
+# Introduction to Container Security: Myth vs. Reality
 
-This module exists to break false confidence early.
 
-Many teams talk about containers as if they are a built-in security control:
 
-- "It is in Docker, so it is isolated."
-- "It is not a VM, but it is close enough."
-- "Root in a container is not real root."
-- "If we use official images and keep things patched, we are fine."
 
-That mindset is dangerous.
 
-Containers are an operational and packaging model first. They can be secured well, but they do not become secure by merely existing. In practice they introduce new attack surface, new trust assumptions, and new failure modes. If those assumptions are wrong, the blast radius can be the host, the build system, the registry, or the entire cluster.
 
-This lecture is intentionally sharper than the others. The point is to make participants uncomfortable enough to stop using container language casually.
 
-## Why This Module Matters
 
-This lecture sets the tone for the rest of Part 02 and the rest of the week:
 
-- later in **The Image Problem** we will show that the image itself is a supply-chain artifact with real security consequences
-- later in the networking module we will show how easy it is to overexpose services and management surfaces
-- later in the hardening module we will show how far you still have to go after "just containerizing" an app
 
-If this module works, participants should stop saying "it runs in a container" as if that answers a security question.
 
-## Learning Objectives
-
-By the end of this module, participants should be able to:
-
-- explain why containers are not equivalent to VMs as a security boundary
-- describe the security significance of the Docker daemon, the Docker socket, and the `docker` group
-- identify high-risk container misconfigurations that turn isolation into host compromise
-- recognize that container escapes are not rare mythology but a recurring vulnerability class
-- explain why containers add supply-chain and build-system risk instead of removing it
-
-## Suggested 30-Minute Flow
-
-| Time | Topic |
-| --- | --- |
-| 0-4 min | Opening shock: what people think containers solve vs what they actually change |
-| 4-9 min | Myth 1: containers are basically secure mini-VMs |
-| 9-14 min | Myth 2: root in a container is not dangerous |
-| 14-19 min | Myth 3: only exotic zero-days matter |
-| 19-25 min | Reality check through CVEs and real attacks |
-| 25-30 min | Takeaways and bridge into the rest of the course |
-
-## The Core Message
-
-Containers do not magically remove risk.
-
-They shift it:
-
-- from guest OS hardening to shared-kernel risk
-- from server patching to image and build-pipeline trust
-- from "who can SSH into the box" to "who can talk to the daemon or publish the wrong container"
-- from one attack surface to several smaller but more easily multiplied attack surfaces
-
-That trade can be worth it.
-
-But it is still a trade.
 
 ## Myth Vs. Reality At A Glance
 

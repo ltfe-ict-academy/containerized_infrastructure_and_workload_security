@@ -9,20 +9,11 @@ A practical orientated course on containerized infrastructure and workload secur
     - **Hands-on: Environment setup, project setup and Docker basics**
  
 2. [**Container Threat Landscape**](./02_Container_Threat_Landscape/README.md)
-    - **Container Security: Myth vs. Reality**
+    - **Introduction to Container Security: Myth vs. Reality**
     - **Attack surface in containerized environments**
-        - The Core Idea
-        - A practical model for Docker attack surface
-        - Ways to analyze the threat landscape
-        - Common frameworks
-        - Practical overview of Docker attack surfaces
-        - Common attack vectors
-    - **Container images: understanding and building**
-    - **The Image Problem: Risks and Vulnerabilities of Container Images**
-        - Images Best Practices
-        - Container Image Scanning
-        - Exploring insecure images in practice
+    - **Container Images: Risks and Vulnerabilities**
     - **Container registries and supply chain attacks**
+    - **Exploiting web apps, the poster child for cloud services**
 
 3. [**Container & Linux Networking**](./03_Container_and_Linux_Networking/README.md)
     - **Introduction to Linux Networking for Containers**
@@ -32,7 +23,6 @@ A practical orientated course on containerized infrastructure and workload secur
     - **Hands-on: Setting up a secure networking environment in a variety of configurations**
 
 4. [**Hardening & Defense-in-Depth**](./04_Hardening_and_Defense_in_Depth/README.md)
-    - **Exploiting web apps, the poster child for cloud services**
     - **Container hardening strategies**
         - Common Mistakes - practical demonstration
         - Host and daemon hardening

@@ -1,7 +1,5 @@
 # Attack Surface In Containerized Environments
 
-
-
 - copy fail exmaple
 
 
