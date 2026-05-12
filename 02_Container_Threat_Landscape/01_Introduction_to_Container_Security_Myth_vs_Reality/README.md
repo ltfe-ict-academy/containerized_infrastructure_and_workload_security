@@ -1,216 +1,216 @@
 # Introduction to Container Security: Myth vs. Reality
 
+Containers are often introduced as a simple way to package and run applications. That simplicity is one of their biggest strengths, but it also creates one of the most common security misunderstandings: the belief that anything running “inside Docker” is automatically isolated, safe, and unable to affect the host.
 
+A Linux container is not a full virtual machine. It does not normally bring its own kernel. Instead, Docker uses Linux kernel features such as namespaces, control groups, capabilities, seccomp, and security modules to isolate and restrict processes. Docker’s own documentation describes namespaces as the first and most straightforward form of isolation, while also pointing out that Docker security depends on several areas: the kernel, the Docker daemon attack surface, container configuration, and hardening features.
 
+> If you have an unknown binary, would you feel safe running it inside Docker? Safer depends on the container configuration, the host, the runtime, the image, the kernel, and what the container can access.
 
+## Myth 1: Containers are lightweight virtual machines
 
+A virtual machine usually has its own kernel. A Linux container does not. A Linux container is a process, or a group of processes, isolated with kernel features such as namespaces, cgroups, capabilities, seccomp, and Linux security modules like AppArmor or SELinux. This distinction matters because a VM-style mental model makes people overestimate the security boundary. If a VM is compromised, the attacker usually still needs a hypervisor escape to reach the host. If a container is compromised, the attacker is already running code on the host kernel, just with restrictions. [Docker’s documentation explains](https://docs.docker.com/engine/security) that when a container starts, Docker creates namespaces and control groups for the container. Namespaces provide isolation, and cgroups control resource usage.
 
+- Run on the host: `uname -a`
+- Run inside a container: `sudo docker run --rm alpine uname -a`
 
+On a native Linux Docker host, both commands usually show the same kernel. The container has its own filesystem view and process namespace, but it is still using the host kernel.
 
+Run: `sudo docker run --rm alpine sh -c 'hostname && ps aux'`
 
+The output looks isolated. The process list is small. The hostname is container-specific. This is useful isolation, but it is not the same as a VM boundary. The practical implication is simple: when a container is compromised, the attacker is already running code on the same kernel as the host. The security question becomes: what exactly is that code allowed to do?
 
+## Myth 2: Containers are secure by default
 
+Docker does include important default protections. For example, [Docker’s default seccomp profile](https://docs.docker.com/engine/security/seccomp/) blocks around 44 system calls out of more than 300 while trying to preserve application compatibility. Seccomp is useful because it reduces what containerized processes can ask the kernel to do. However, defaults can be weakened or bypassed by configuration. A container can be started with additional capabilities, disabled seccomp rules, host filesystem mounts, host networking, privileged mode, or access to the Docker daemon. Useful defaults do not mean a secure deployment.
 
-## Myth Vs. Reality At A Glance
+- Check the security options enabled on a Docker host: `sudo docker info --format '{{json .SecurityOptions}}'`
+- Check whether a running container sees seccomp enabled: 
+  - `sudo docker run --rm alpine sh -c 'grep Seccomp /proc/self/status'`
+  - The output confirms that the container is running in Seccomp Mode 2, meaning it is actively filtered by a custom security profile rather than being unrestricted. The presence of one filter indicates that Docker's default security policy is successfully intercepting system calls to prevent unauthorized or dangerous kernel actions.
 
-| Myth | Reality |
-| --- | --- |
-| Containers are basically small VMs | Linux containers share the host kernel and depend heavily on runtime correctness and configuration hygiene |
-| Root in a container is harmless | By default Docker still runs containers as `root`, and the daemon itself runs as `root` unless you deliberately use Rootless mode |
-| The daemon socket is just an API | The daemon is effectively a root broker; access to it is often access to the host |
-| Only rare container escapes matter | Misconfiguration is more common than zero-days, and zero-days still keep happening |
-| Builds and images are packaging details | Builders, frontends, cache mounts, registries, and mutable tags are part of the attack surface |
-| Docker defaults make things safe enough | Useful controls exist, but strong isolation and hardening are not what most teams ship by default |
+The important lesson is that container security starts with defaults, but it does not end there.
 
-## Myth 1: "Containers Are Basically Secure Mini-VMs"
+## Myth 3: Root inside a container is harmless
 
-This is the first dangerous oversimplification.
+Root inside a container is restricted by the container boundary, but it is still root inside that environment. That distinction matters. The risk becomes obvious when host resources are mounted into the container. Docker bind mounts allow a file or directory from the host to appear inside the container. Docker documents bind mounts as a way to mount host filesystem paths into containers.
 
-### Reality
+Create a test directory on the host:
+```bash
+mkdir -p /tmp/container-security-demo
+echo "created on host" > /tmp/container-security-demo/host-file.txt
+ls -ln /tmp/container-security-demo
+```
 
-On Linux, containers are not mini-VMs. They are isolated processes sharing the host kernel.
+Run a container as root and mount that directory:
+```bash
+sudo docker run --rm \
+  -v /tmp/container-security-demo:/demo \
+  alpine sh -c 'id && echo "created by root in container" > /demo/container-file.txt && ls -ln /demo'
 
-Docker's own security documentation still frames the model around:
+# Check the host again:
+ls -ln /tmp/container-security-demo
+cat /tmp/container-security-demo/container-file.txt
+```
 
-- kernel namespaces
-- cgroups
-- Linux capabilities
-- Docker daemon attack surface
-- hardening features such as seccomp and AppArmor
+The container wrote directly into a host directory. This is not a container escape. This is expected behavior. That is what makes it important. The container did not need a vulnerability. It did not need malware. It only needed permission that the operator gave it. Dangerous mounts include:
+```
+-v /:/host
+-v /etc:/host-etc
+-v /home/user:/data
+-v /var/run/docker.sock:/var/run/docker.sock
+```
 
-That is already a clue: the security story depends on many moving parts, not on one hard boundary.
+A host mount is a deliberate hole in the container boundary. Sometimes it is necessary, especially in development. But it should never be treated as harmless.
 
-NIST SP 800-190 has been warning about container-specific security concerns since the final publication on **September 25, 2017**. This is not a new objection invented by skeptics.
+## Myth 4: The Docker socket is just another file
 
-### Important Nuance
+The Docker socket is one of the most sensitive files that can be mounted into a container. On many Linux systems, the Docker socket is available at: `/var/run/docker.sock`
 
-Participants should understand one important platform detail:
+This socket is the local API interface to the Docker daemon. Access to it allows a process to ask Docker to create containers, mount filesystems, manage images, and interact with the Docker environment.
 
-- on Linux servers, containers typically share the host kernel directly
-- on Docker Desktop for macOS and Windows, containers run inside a Linux VM, which adds another boundary
-
-That does not make Docker Desktop magically "safe", but it does mean the isolation story is different from a native Linux production host.
-
-### The Teaching Point
-
-If the host kernel or container runtime has a flaw, the security boundary is much weaker than a VM boundary.
-
-That is why container escape vulnerabilities matter so much.
-
-## Myth 2: "Root In A Container Is Not Real Root"
-
-This is only partially true, and teams often turn the partial truth into a fatal mistake.
-
-### Reality
-
-Docker documents two facts that matter a lot:
-
-- the default user inside a container is `root`
-- the Docker daemon requires `root` privileges unless you deliberately opt into Rootless mode
-
-Docker also explicitly warns that the `docker` group grants **root-level privileges**.
-
-That means the practical question is not only "is root in the container limited?"
-
-It is also:
-
-- who can start containers?
-- who can mount host paths?
-- who can talk to the daemon?
-- who can use `docker exec`, `docker cp`, `docker run -v /:/host`, or `--privileged`?
-
-In other words, many real-world compromises do not need a kernel 0-day at all.
-
-They need:
-
-- daemon access
-- socket access
-- bad flags
-- bad mounts
-- bad trust decisions
-
-## Disposable-VM Demo 1: Docker Socket Equals Host Power
-
-Run this only in an isolated training VM.
-
-The point is simple: if a container can talk to `/var/run/docker.sock`, it can often control the host through the daemon.
-
-Example demonstration:
+OWASP’s Docker Security Cheat Sheet warns that mounting the Docker socket inside a container is equivalent to giving the container unrestricted root access to the host. A safe demonstration is to query Docker version information through the socket:
 
 ```bash
-docker run --rm -it \
+sudo docker run --rm \
+  -u root \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  docker:28-cli docker ps
+  curlimages/curl \
+  --unix-socket /var/run/docker.sock \
+  http://localhost/version
 ```
 
-If that works, the container can ask the daemon to start another container with host mounts:
+This command only reads version information, but it proves the container can communicate with the Docker daemon.
 
+The implication is serious: if a container can control Docker, it may be able to ask Docker to start more powerful containers. The container boundary can collapse because the attacker no longer needs to directly break out. They can use the daemon as the control plane. This is why `/var/run/docker.sock` should be treated as a high-risk mount, not a convenience feature.
+
+## Myth 5: `--privileged` just fixes annoying errors
+
+The `--privileged` flag is often used as a shortcut when something inside a container does not work. It may fix the immediate problem, but it does so by removing many of the protections that made the container safer in the first place. OWASP recommends avoiding privileged containers and granting only the specific Linux capabilities required by the workload. It also notes that `--privileged` adds all Linux kernel capabilities to the container.
+
+- Compare a normal container: `sudo docker run --rm alpine sh -c 'id; ls /dev | head; grep CapEff /proc/self/status; grep Seccomp /proc/self/status'`
+- With a privileged container: `sudo docker run --rm --privileged alpine sh -c 'id; ls /dev | head; grep CapEff /proc/self/status; grep Seccomp /proc/self/status'`
+
+The privileged container has a much broader permission set and can see more of the system’s device interface. The flag also disables the Seccomp filters.
+
+The exact capabilities depend on the application. The important rule is that permission should be intentional and minimal. If a service only runs with `--privileged`, that is not a small configuration detail. It is a major security design problem.
+
+## Myth 6: If the image runs, the image is fine
+
+A container image is not only application code. It contains a filesystem, dependencies, package manager artifacts, metadata, build layers, and sometimes secrets. This makes images part of the software supply chain.
+
+One common mistake is putting secrets into Docker build arguments or environment variables. Docker explicitly warns that sensitive data should not be used in `ARG` or `ENV` instructions because they can persist in the final image.
+
+Create a deliberately bad Dockerfile:
+```Dockerfile
+FROM alpine
+ARG API_TOKEN
+RUN echo "Using token: $API_TOKEN" > /tmp/build.log
+RUN rm /tmp/build.log
+CMD ["sh"]
+```
+
+Build it:
 ```bash
-docker run --rm -it \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  docker:28-cli \
-  docker run --rm -v /:/host alpine:3.21 chroot /host sh -c "id && hostname"
+sudo docker build --build-arg API_TOKEN=demo-secret-123 -t secret-demo .
 ```
 
-This is not a sophisticated exploit.
-
-It is a configuration mistake.
-
-That is the point.
-
-## Myth 3: "Only Exotic Escapes Matter"
-
-This myth causes teams to overfocus on CVE headlines while ignoring the far more common path: self-inflicted privilege.
-
-### Reality
-
-In many environments, the faster route to host compromise is not a new breakout CVE.
-
-It is one of these:
-
-- `--privileged`
-- host PID namespace sharing
-- host network namespace sharing
-- host filesystem bind mounts
-- daemon socket exposure
-- remote Docker API exposure
-- giving too many users membership in the `docker` group
-
-### Disposable-VM Demo 2: Privileged Container + Host Mount = Game Over
-
-Run only in a throwaway Linux VM:
-
+Inspect the image history:
 ```bash
-docker run --rm -it \
-  --privileged \
-  --pid=host \
-  -v /:/host \
-  alpine:3.21 sh
+sudo docker history --no-trunc secret-demo
 ```
 
-Inside the container:
+The point is not that this exact example is how every secret leaks. The point is that images have memory. Build steps, layers, metadata, and copied files can preserve information longer than expected. If a secret enters an image, assume it may be recoverable.
 
-```sh
-chroot /host sh
-id
-hostname
-```
+## Myth 7: Popular images are automatically trustworthy
 
-Again, this is not an advanced exploit.
+https://chatgpt.com/c/6a031ba2-df14-832e-a3c3-4ce09983ee18
 
-It is what happens when people treat container flags as operational conveniences rather than security decisions.
+## Myth 8: Container escapes are only theoretical
 
-## Myth 4: "Container Escapes Are Rare Edge Cases"
 
-This is the myth that collapses as soon as you look at the runtime vulnerability timeline.
 
-### Reality
+8. Myth 7: “Official or popular images are always safe”
+Explanation
 
-The lesson from the advisory history is not "containers are broken forever."
+Popularity is not the same as trust. Official images, verified publishers, signed artifacts, SBOMs, digest pinning, vulnerability scanning, and controlled registries all reduce risk, but none of them create perfect safety.
 
-The lesson is:
+This is especially important because container images are often rebuilt from other images. A compromised base image can silently affect many downstream images.
 
-- the runtime is security-critical
-- the bug class keeps coming back
-- isolation cannot be treated as permanently solved
+Real example: XZ Utils backdoor still found in Docker images
 
-### Runtime Escape Timeline
+The XZ Utils backdoor was one of the most important open-source supply-chain incidents of 2024. In 2025, Binarly reported that XZ backdoor artifacts were still present in some Docker images. Binarly focused on Debian-based images and noted that the impact on images from other affected distributions was unknown.
 
-#### February 11, 2019: CVE-2019-5736
+This is a strong teaching example because it shows that even after a major incident becomes public, vulnerable or malicious artifacts can remain in container ecosystems.
 
-`runc` allowed an attacker to overwrite the host `runc` binary and gain host root access under the right conditions. This became one of the most famous container escape examples because it destroyed the lazy belief that "container breakout is basically theoretical."
+Suggested instructor wording:
 
-#### January 31, 2024: CVE-2024-21626
+“The incident was discovered, explained, and widely discussed. But container images built during the bad window can still exist. Containers make software portable, but they also make old mistakes portable.”
 
-The `runc` advisory described several breakout paths caused by leaked file descriptors. The impact included host filesystem access and possible complete container escape.
+Real example: Trivy Docker Hub supply-chain compromise
 
-#### January 31, 2024: BuildKit CVE-2024-23651, CVE-2024-23652, CVE-2024-23653
+In March 2026, Docker published a post about a Trivy supply-chain compromise in which attackers compromised Aqua Security’s CI/CD pipeline and pushed backdoored versions of the aquasec/trivy vulnerability scanner image to Docker Hub. Docker stated that the malicious images contained an infostealer targeting CI/CD secrets, cloud credentials, SSH keys, and Docker configurations.
 
-These were especially important because they moved the fear boundary earlier in the lifecycle:
+This is especially powerful for students because Trivy is itself a security tool. The lesson is not “do not use scanners.” The lesson is:
 
-- host files accessible to the build container
-- host files removed outside the container
-- elevated execution through BuildKit APIs under the wrong conditions
+“Security tools are also software supply chain dependencies.”
 
-This is a crucial teaching point:
+Teaching point
 
-the build system is part of the attack surface.
+A mature container image policy should include:
 
-#### July 23, 2024: CVE-2024-41110
+Use trusted base images.
+Pin by digest, not only by tag.
+Scan images before use.
+Rebuild images regularly.
+Avoid stale base images.
+Use private registries for approved images.
+Do not blindly trust public image names.
+Monitor for compromised upstreams.
+9. Myth 8: “Container escapes are only conference talks”
+Explanation
 
-Docker Engine had a critical authorization-plugin bypass regression. Under specific conditions, a specially crafted API request could be forwarded without the body, potentially causing the plugin to approve something it should have denied.
+Container escapes are real, but they are not the only risk. In many incidents, attackers do not need a sophisticated escape because the container is already misconfigured. However, runtime vulnerabilities do happen, and learners should know that the boundary depends on complex software.
 
-The lesson here is nasty and important:
+Real example: Leaky Vessels, 2024
 
-even security controls around the daemon can fail.
+In early 2024, multiple vulnerabilities were disclosed in runc and BuildKit. These were collectively discussed as “Leaky Vessels.” Wiz described the vulnerabilities as affecting runc and BuildKit and posing a container escape risk. Snyk also described four container breakout vulnerabilities in core container infrastructure that could allow unauthorized access to the underlying host from within a container.
 
-#### November 5, 2025: Multiple New `runc` Advisories
+One of the best-known issues was CVE-2024-21626 in runc. Red Hat described it as a flaw involving WORKDIR handling, a file descriptor leak, and potential container breakout or host compromise.
 
-The `runc` security overview listed three high-severity advisories published on **November 5, 2025**:
+Use this as a bridge between configuration mistakes and real vulnerabilities:
 
-- **CVE-2025-31133**: masked-path abuse via mount race conditions
-- **CVE-2025-52881**: arbitrary write gadgets and procfs write redirects leading to denial of service and escape conditions
-- **CVE-2025-52565**: `/dev/console` mount-related races that could expose writable paths leading to denial of service or breakout conditions
+“Most of today’s demos are misconfigurations. But even if you avoid those mistakes, you still depend on the correctness of the runtime, builder, kernel, and security profiles.”
+
+Real example: Docker Desktop CVE-2025-9074
+
+Docker’s own security advisory says Docker Desktop 4.44.3 fixed CVE-2025-9074, where a malicious container running on Docker Desktop could access the Docker Engine and launch additional containers without requiring the Docker socket to be mounted. Docker also stated this could allow unauthorized access to user files on the host system, and that Enhanced Container Isolation did not mitigate the vulnerability.
+
+This example is useful because it challenges a common assumption:
+
+“I did not mount the Docker socket, so I am safe.”
+
+For this vulnerability, the socket did not need to be mounted. That makes it a good “myth vs. reality” story.
+
+Teaching point
+
+Container escape risk has three layers:
+
+Misconfiguration escape:
+The operator gives the container too much access.
+
+Runtime escape:
+A bug in runc, BuildKit, Docker Desktop, containerd, or related components weakens isolation.
+
+Kernel escape:
+A kernel vulnerability is reachable from inside the container.
+
+
+
+
+
+
+
+
 
 ### Inference From The Advisory Pattern
 
@@ -295,87 +295,3 @@ The follow-up questions are what matter:
 - exposed through which ports?
 - reachable from which networks?
 - controlled through which daemon or orchestrator APIs?
-
-## What Should Scare The Audience Most
-
-If you want the short version of this lecture, it is this:
-
-### 1. Misconfiguration Beats Exploitation
-
-Most teams are more likely to be compromised by:
-
-- exposed Docker API
-- mounted Docker socket
-- `--privileged`
-- bind-mounting the host
-- weak registry trust
-
-than by a Hollywood-style container zero-day.
-
-### 2. But The Zero-Days Still Exist
-
-And when they appear, they target one of the exact things container security depends on:
-
-- `runc`
-- mount handling
-- file descriptors
-- BuildKit
-- daemon authorization logic
-
-### 3. The Blast Radius Is Bigger Than People Think
-
-Bad container decisions can expose:
-
-- the host
-- the build worker
-- the registry
-- secrets used during build
-- other workloads on the same node
-
-## What To Say Out Loud In Class
-
-If you want a blunt summary line for the room:
-
-> Docker is not a sandbox. It is a very useful way to package and run processes, and if you treat it like a sandbox, it will eventually embarrass you.
-
-And the follow-up:
-
-> The dangerous thing about containers is not that they are always insecure. The dangerous thing is how quickly people start assuming they are secure enough by default.
-
-## Bridge To The Rest Of The Course
-
-This lecture should create the right mental posture for what comes next.
-
-After this module:
-
-- **The Image Problem** will make more sense because participants now understand that the artifact itself is part of the attack surface
-- the later networking module will make more sense because host exposure and flat trust boundaries should already feel dangerous
-- the hardening module will make more sense because participants now understand why runtime restrictions, secrets handling, and observability matter
-
-This is the emotional job of the lecture:
-
-not to make participants hate containers
-
-but to make them stop underestimating them.
-
-## References
-
-- NIST SP 800-190, *Application Container Security Guide* (final, published September 25, 2017): <https://csrc.nist.gov/pubs/sp/800/190/final>
-- Docker Engine security overview: <https://docs.docker.com/engine/security/>
-- Docker Desktop container-isolation FAQ: <https://docs.docker.com/security/faqs/containers/>
-- Docker default container user and runtime options: <https://docs.docker.com/engine/containers/run/>
-- Docker Linux post-install steps warning that the `docker` group grants root-level privileges: <https://docs.docker.com/engine/install/linux-postinstall>
-- Docker Rootless mode: <https://docs.docker.com/engine/security/rootless/>
-- Docker daemon remote-access warning: <https://docs.docker.com/engine/daemon/remote-access/>
-- Protect the Docker daemon socket: <https://docs.docker.com/engine/security/protect-access/>
-- CVE-2019-5736 (`runc` host root overwrite): <https://nvd.nist.gov/vuln/detail/CVE-2019-5736>
-- CVE-2024-21626 (`runc` breakout through leaked file descriptors): <https://nvd.nist.gov/vuln/detail/CVE-2024-21626>
-- `runc` security overview, including November 5, 2025 advisories: <https://github.com/opencontainers/runc/security>
-- CVE-2025-31133 (`runc` masked-path abuse): <https://github.com/advisories/GHSA-9493-h29p-rfm2>
-- CVE-2025-52881 (`runc` arbitrary write gadgets and procfs redirects): <https://github.com/advisories/GHSA-cgrx-mc8f-2prm>
-- CVE-2025-52565 (`runc` `/dev/console` mount race breakout): <https://github.com/advisories/GHSA-qw9x-cqr3-wc7r>
-- CVE-2024-23651 (BuildKit host file access through cache-mount race): <https://nvd.nist.gov/vuln/detail/CVE-2024-23651>
-- CVE-2024-23652 (BuildKit host file removal outside the container): <https://nvd.nist.gov/vuln/detail/CVE-2024-23652>
-- CVE-2024-23653 (BuildKit elevated execution issue): <https://nvd.nist.gov/vuln/detail/CVE-2024-23653>
-- CVE-2024-41110 (Docker Engine AuthZ bypass regression): <https://github.com/advisories/GHSA-v23v-6jw2-98fq>
-- Microsoft case study on TeamTNT targeting exposed Docker API and unauthenticated Weave Scope, published September 8, 2020: <https://techcommunity.microsoft.com/t5/azure-security-center/teamtnt-activity-targets-weave-scope-deployments/ba-p/1645968>
