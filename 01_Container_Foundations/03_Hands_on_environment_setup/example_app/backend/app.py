@@ -2,27 +2,69 @@ import json
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
+from decimal import Decimal
 
-import psycopg
 import redis
-from flask import Flask, jsonify, request
-from psycopg.rows import dict_row
+import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import Numeric, Text, create_engine, literal, or_, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOGGER = logging.getLogger("course-backend")
 
-app = Flask(__name__)
-
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://postgres:postgres@db:5432/courseapp"
-)
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@db:5432/courseapp")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 ENABLE_DEBUG_ROUTES = os.getenv("ENABLE_DEBUG_ROUTES", "true").lower() == "true"
 
 
+def sqlalchemy_database_url(database_url: str) -> str:
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    if database_url.startswith("postgres://"):
+        return database_url.replace("postgres://", "postgresql+psycopg://", 1)
+    return database_url
+
+
+engine = create_engine(sqlalchemy_database_url(DATABASE_URL), pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Product(Base):
+    __tablename__ = "products"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    wait_for_services()
+    yield
+
+
+app = FastAPI(title="Course Backend", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_headers=["Content-Type"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+)
+
+
 def wait_for_services():
     for name, check in (("postgres", check_db), ("redis", check_redis)):
+        print(name, check)
         for attempt in range(1, 31):
             try:
                 check()
@@ -35,22 +77,26 @@ def wait_for_services():
             raise RuntimeError(f"{name} did not become ready in time")
 
 
-def db_connection():
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
-
-
 def redis_client():
     return redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
 
 def check_db():
-    with db_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
+    with SessionLocal() as session:
+        session.execute(select(literal(1))).scalar_one()
 
 
 def check_redis():
     redis_client().ping()
+
+
+def product_to_dict(product: Product):
+    return {
+        "id": product.id,
+        "name": product.name,
+        "description": product.description,
+        "price": float(product.price),
+    }
 
 
 def load_products():
@@ -59,30 +105,15 @@ def load_products():
     if cached:
         return json.loads(cached), "redis"
 
-    with db_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, name, description, price::float8 AS price
-                FROM products
-                ORDER BY id
-                """
-            )
-            rows = cur.fetchall()
+    with SessionLocal() as session:
+        products = session.scalars(select(Product).order_by(Product.id)).all()
+        rows = [product_to_dict(product) for product in products]
 
     cache.setex("products:all", 60, json.dumps(rows))
     return rows, "postgres"
 
 
-@app.after_request
-def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
-    return response
-
-
-@app.route("/api/health")
+@app.get("/api/health")
 def health():
     db_ok = True
     redis_ok = True
@@ -97,70 +128,71 @@ def health():
     except Exception:  # noqa: BLE001
         redis_ok = False
 
-    return jsonify(
-        {
-            "service": "course-backend",
-            "status": "ok" if db_ok and redis_ok else "degraded",
-            "database": db_ok,
-            "redis": redis_ok,
-            "debug_routes": ENABLE_DEBUG_ROUTES,
-        }
-    )
+    return {
+        "service": "course-backend",
+        "status": "ok" if db_ok and redis_ok else "degraded",
+        "database": db_ok,
+        "redis": redis_ok,
+        "debug_routes": ENABLE_DEBUG_ROUTES,
+    }
 
 
-@app.route("/api/products")
+@app.get("/api/products")
 def products():
     rows, source = load_products()
-    return jsonify({"source": source, "items": rows})
+    return {"source": source, "items": rows}
 
 
-@app.route("/api/products/search")
-def search_products():
-    query = request.args.get("q", "").strip()
+@app.get("/api/products/search")
+def search_products(q: str = ""):
+    query = q.strip()
+    search_pattern = f"%{query}%"
 
-    sql = f"""
-        SELECT id, name, description, price::float8 AS price
-        FROM products
-        WHERE name ILIKE '%{query}%'
-           OR description ILIKE '%{query}%'
-        ORDER BY id
-    """
+    statement = (
+        select(Product)
+        .where(
+            or_(
+                Product.name.ilike(search_pattern),
+                Product.description.ilike(search_pattern),
+            )
+        )
+        .order_by(Product.id)
+    )
 
-    with db_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql)
-            rows = cur.fetchall()
+    with SessionLocal() as session:
+        products = session.scalars(statement).all()
+        rows = [product_to_dict(product) for product in products]
 
-    return jsonify({"query": query, "sql": sql, "items": rows})
+    return {"query": query, "items": rows}
 
 
-@app.route("/api/cache/clear", methods=["POST"])
+@app.post("/api/cache/clear")
 def clear_cache():
     redis_client().delete("products:all")
-    return jsonify({"status": "cleared"})
+    return {"status": "cleared"}
 
 
-@app.route("/api/admin/debug")
+@app.get("/api/admin/debug")
 def debug():
     if not ENABLE_DEBUG_ROUTES:
-        return jsonify({"error": "debug routes disabled"}), 404
+        return JSONResponse(
+            status_code=404,
+            content={"error": "debug routes disabled"},
+        )
 
-    return jsonify(
-        {
-            "environment": {
-                "DATABASE_URL": DATABASE_URL,
-                "REDIS_URL": REDIS_URL,
-                "ENABLE_DEBUG_ROUTES": ENABLE_DEBUG_ROUTES,
-                "FLASK_ENV": os.getenv("FLASK_ENV", "development"),
-            },
-            "process": {
-                "uid": os.getuid() if hasattr(os, "getuid") else "n/a",
-                "cwd": os.getcwd(),
-            },
-        }
-    )
+    return {
+        "environment": {
+            "DATABASE_URL": DATABASE_URL,
+            "REDIS_URL": REDIS_URL,
+            "ENABLE_DEBUG_ROUTES": ENABLE_DEBUG_ROUTES,
+            "APP_ENV": os.getenv("APP_ENV", "development"),
+        },
+        "process": {
+            "uid": os.getuid() if hasattr(os, "getuid") else "n/a",
+            "cwd": os.getcwd(),
+        },
+    }
 
 
 if __name__ == "__main__":
-    wait_for_services()
-    app.run(host="0.0.0.0", port=8000, debug=True)
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
