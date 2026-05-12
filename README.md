@@ -6,11 +6,7 @@ A practical orientated course on containerized infrastructure and workload secur
 1. [**Container Foundations**](./01_Container_Foundations/README.md)
     - **Introduction to containers**
     - **Containers under the hood**
-    - **Containers vs. VMs**
-    - **Short vs. long-lived containers, cold starts, serverless architecture**
-    - **Container images: understanding and building**
-    - **Hands-on: preparation of containerized workloads**
-    - **Hands-on: container composition**
+    - **Hands-on: Environment setup, project setup and Docker basics**
  
 2. [**Container Threat Landscape**](./02_Container_Threat_Landscape/README.md)
     - **Container Security: Myth vs. Reality**
@@ -21,7 +17,7 @@ A practical orientated course on containerized infrastructure and workload secur
         - Common frameworks
         - Practical overview of Docker attack surfaces
         - Common attack vectors
-    - **What is S-SDLC and how it applies to containers**
+    - **Container images: understanding and building**
     - **The Image Problem: Risks and Vulnerabilities of Container Images**
         - Images Best Practices
         - Container Image Scanning
