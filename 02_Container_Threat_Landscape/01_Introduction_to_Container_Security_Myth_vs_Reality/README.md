@@ -123,175 +123,48 @@ The point is not that this exact example is how every secret leaks. The point is
 
 ## Myth 7: Popular images are automatically trustworthy
 
-https://chatgpt.com/c/6a031ba2-df14-832e-a3c3-4ce09983ee18
+Public container registries are convenient, but every image pull is a trust decision.
+
+A popular image may still contain vulnerable dependencies. A familiar project may still have a compromised release. A security tool may still be delivered through a compromised pipeline.
+
+[In 2025, Binarly reported](https://www.binarly.io/blog/persistent-risk-xz-utils-backdoor-still-lurking-in-docker-images) that artifacts related to the XZ Utils backdoor were still present in some Docker Hub images more than a year after the original XZ supply-chain incident. Their analysis focused on Debian images, and they noted that the impact on images from other affected distributions remained unknown.
+
+This example matters because it shows how container images can preserve old supply-chain problems. Even after a vulnerability becomes public, images built during a compromise window may remain available or may have been used as bases for other images.
+
+A more recent example is the 2026 Trivy supply-chain compromise. [Docker reported that on March 19, 2026](https://www.docker.com/blog/trivy-supply-chain-compromise-what-docker-hub-users-should-know/), threat actors compromised Aqua Security’s CI/CD pipeline and used stolen credentials to push backdoored versions of the aquasec/trivy vulnerability scanner image to Docker Hub. The malicious images contained an infostealer targeting CI/CD secrets, cloud credentials, SSH keys, and Docker configurations. A second wave followed on March 22.
+
+This is an uncomfortable example because Trivy is a security scanner. The implication is clear: security tools are also software dependencies, and they can also become part of the attack path. Image trust is not a one-time decision. It is an ongoing process.
 
 ## Myth 8: Container escapes are only theoretical
 
+Many container compromises do not require a real escape because the container is misconfigured. However, real runtime escape vulnerabilities do happen. In 2024, several [vulnerabilities affecting runc and BuildKit were disclosed](https://www.wiz.io/blog/leaky-vessels-container-escape-vulnerabilities) and widely discussed under the name “Leaky Vessels.” Wiz described CVE-2024-21626 as a runc vulnerability that could allow container escape under multiple conditions by exploiting leaked file descriptors to access the host filesystem.
 
+[Red Hat’s advisory for CVE-2024-21626](https://access.redhat.com/security/vulnerabilities/RHSB-2024-001) describes a file descriptor leak and path traversal issue involving WORKDIR and RUN handling, with related BuildKit vulnerabilities also referenced. This matters because runc and BuildKit are not obscure components. They are part of the basic container ecosystem. If this layer is vulnerable, the isolation model itself may be weakened.
 
-8. Myth 7: “Official or popular images are always safe”
-Explanation
+Another example is [Docker Desktop CVE-2025-9074](https://docs.docker.com/security/security-announcements/). Docker’s security announcement states that a malicious container running on Docker Desktop could access the Docker Engine and launch additional containers without requiring the Docker socket to be mounted. Docker also stated that this could allow unauthorized access to user files on the host system, and that Enhanced Container Isolation did not mitigate the vulnerability.
 
-Popularity is not the same as trust. Official images, verified publishers, signed artifacts, SBOMs, digest pinning, vulnerability scanning, and controlled registries all reduce risk, but none of them create perfect safety.
+That case is especially important because it breaks a common assumption:
 
-This is especially important because container images are often rebuilt from other images. A compromised base image can silently affect many downstream images.
+> I did not mount the Docker socket, so this class of problem cannot happen.
 
-Real example: XZ Utils backdoor still found in Docker images
+For CVE-2025-9074, the Docker socket did not need to be mounted.
 
-The XZ Utils backdoor was one of the most important open-source supply-chain incidents of 2024. In 2025, Binarly reported that XZ backdoor artifacts were still present in some Docker images. Binarly focused on Debian-based images and noted that the impact on images from other affected distributions was unknown.
+Container escape risk can come from several places:
+- *Misconfiguration*: The container is given too much access.
+- *Runtime vulnerability*: A bug in Docker, runc, BuildKit, containerd, or related tooling weakens the boundary.
+- *Kernel vulnerability*: A kernel bug is reachable from inside the container.
+- *Supply-chain compromise*: The image, base image, scanner, or build system is already malicious.
+ 
+## Myth 9: Containers Reduce Complexity
 
-This is a strong teaching example because it shows that even after a major incident becomes public, vulnerable or malicious artifacts can remain in container ecosystems.
+Containers often feel like they reduce complexity because they make applications easier to package, move, and start. Instead of installing a runtime, system packages, libraries, and services directly on a host, we can place them into an image and run the application with a single command. This is a real benefit: NIST describes containers as a portable, reusable, and automatable way to package and run applications. But this does not mean the complexity disappears. It usually moves into Dockerfiles, image layers, registries, Compose files, volumes, networks, runtime flags, secrets, and CI/CD pipelines.
 
-Suggested instructor wording:
+A simple command such as `docker compose up` can hide a lot of infrastructure. Docker Compose is specifically designed to define application services, networks, volumes, and related configuration in a Compose file. That is convenient, but it also means the application is no longer just “the code.” It is now the code plus image build rules, service dependencies, internal DNS, persistent storage, exposed ports, environment variables, and registry trust. Docker’s Compose documentation describes this model around services, networks, and volumes, which are all operational and security-relevant parts of the system.
 
-“The incident was discovered, explained, and widely discussed. But container images built during the bad window can still exist. Containers make software portable, but they also make old mistakes portable.”
+This becomes important for security because every new layer creates new assumptions. A Dockerfile may silently depend on an outdated base image. A Compose file may expose a port that was only meant for development. A named volume may preserve sensitive data after the container is removed. An environment variable may contain a password. A registry tag such as latest may change without warning. The container made the application easier to start, but the security model now depends on understanding the image, the build process, the registry, the runtime configuration, and the host.
 
-Real example: Trivy Docker Hub supply-chain compromise
+Containers can also make complexity more visible. A Dockerfile documents how the image is built. A Compose file documents how services connect. Multi-stage builds can separate build-time dependencies from the final runtime image, producing cleaner and smaller images, but they also introduce more build stages and more decisions about what should or should not be copied into the final image. Docker recommends multi-stage builds to improve builds and reduce final image size, which is useful, but it is still another layer that must be understood and maintained.
 
-In March 2026, Docker published a post about a Trivy supply-chain compromise in which attackers compromised Aqua Security’s CI/CD pipeline and pushed backdoored versions of the aquasec/trivy vulnerability scanner image to Docker Hub. Docker stated that the malicious images contained an infostealer targeting CI/CD secrets, cloud credentials, SSH keys, and Docker configurations.
+The security implication is that containers **do not automatically simplify the system; they reorganize it**. OWASP notes that Docker can **improve security when used correctly**, but **misconfigurations can reduce security or introduce new vulnerabilities**. This is the key reality behind the myth: containers reduce some operational friction, but they introduce new places where mistakes can happen. A containerized application is only simpler if the team understands and controls the image, runtime permissions, secrets, volumes, networks, and update process.
 
-This is especially powerful for students because Trivy is itself a security tool. The lesson is not “do not use scanners.” The lesson is:
-
-“Security tools are also software supply chain dependencies.”
-
-Teaching point
-
-A mature container image policy should include:
-
-Use trusted base images.
-Pin by digest, not only by tag.
-Scan images before use.
-Rebuild images regularly.
-Avoid stale base images.
-Use private registries for approved images.
-Do not blindly trust public image names.
-Monitor for compromised upstreams.
-9. Myth 8: “Container escapes are only conference talks”
-Explanation
-
-Container escapes are real, but they are not the only risk. In many incidents, attackers do not need a sophisticated escape because the container is already misconfigured. However, runtime vulnerabilities do happen, and learners should know that the boundary depends on complex software.
-
-Real example: Leaky Vessels, 2024
-
-In early 2024, multiple vulnerabilities were disclosed in runc and BuildKit. These were collectively discussed as “Leaky Vessels.” Wiz described the vulnerabilities as affecting runc and BuildKit and posing a container escape risk. Snyk also described four container breakout vulnerabilities in core container infrastructure that could allow unauthorized access to the underlying host from within a container.
-
-One of the best-known issues was CVE-2024-21626 in runc. Red Hat described it as a flaw involving WORKDIR handling, a file descriptor leak, and potential container breakout or host compromise.
-
-Use this as a bridge between configuration mistakes and real vulnerabilities:
-
-“Most of today’s demos are misconfigurations. But even if you avoid those mistakes, you still depend on the correctness of the runtime, builder, kernel, and security profiles.”
-
-Real example: Docker Desktop CVE-2025-9074
-
-Docker’s own security advisory says Docker Desktop 4.44.3 fixed CVE-2025-9074, where a malicious container running on Docker Desktop could access the Docker Engine and launch additional containers without requiring the Docker socket to be mounted. Docker also stated this could allow unauthorized access to user files on the host system, and that Enhanced Container Isolation did not mitigate the vulnerability.
-
-This example is useful because it challenges a common assumption:
-
-“I did not mount the Docker socket, so I am safe.”
-
-For this vulnerability, the socket did not need to be mounted. That makes it a good “myth vs. reality” story.
-
-Teaching point
-
-Container escape risk has three layers:
-
-Misconfiguration escape:
-The operator gives the container too much access.
-
-Runtime escape:
-A bug in runc, BuildKit, Docker Desktop, containerd, or related components weakens isolation.
-
-Kernel escape:
-A kernel vulnerability is reachable from inside the container.
-
-
-
-
-
-
-
-
-
-### Inference From The Advisory Pattern
-
-This is an inference from the official advisory history:
-
-the problem is not one isolated bug.
-
-The problem is that container isolation depends on a complex interaction between:
-
-- kernel features
-- mount logic
-- file descriptor handling
-- procfs behavior
-- LSM integration
-- runtime correctness
-
-That is not a reason to panic.
-
-It is a reason to stop talking about containers like a solved isolation primitive.
-
-## Myth 5: "The Docker Daemon Is Just Plumbing"
-
-This is one of the most damaging misunderstandings in real environments.
-
-### Reality
-
-Docker's own documentation still warns that opening the Docker daemon to remote clients can leave you vulnerable to unauthorized host access and other attacks. As of **April 9, 2026**, the documentation explicitly warns that if the connection is not properly secured, remote non-root users can gain root access on the host.
-
-The daemon is not a convenience helper.
-
-It is a high-value control plane.
-
-If an attacker can talk to it, they can often:
-
-- start new containers
-- mount host files
-- enter running containers
-- extract images
-- create privileged workloads
-
-## Real-World Example: TeamTNT And Exposed Docker Management Surfaces
-
-On **September 8, 2020**, Microsoft published a case study describing TeamTNT activity targeting:
-
-- exposed Docker API servers
-- exposed Weave Scope instances without authentication
-
-The Microsoft write-up described attackers deploying malicious images, running cryptocurrency miners, and spreading through exposed Docker endpoints. It also described Weave Scope as especially dangerous because it could provide shell access to pods or nodes as root when exposed without authentication.
-
-This is exactly the type of operational failure this module is meant to highlight:
-
-- no fancy exploit chain
-- no nation-state magic
-- just exposed management surfaces and terrible assumptions
-
-## Myth 6: "Containers Reduce Complexity"
-
-Operationally, containers often reduce some kinds of drift and packaging pain.
-
-Security-wise, they usually add layers you now need to defend:
-
-- the image
-- the registry
-- the build system
-- the runtime
-- the daemon
-- the orchestration layer
-- the network overlay
-- the secrets path
-- the monitoring and logging plane
-
-This is why saying "we containerized it" tells a security engineer almost nothing.
-
-The follow-up questions are what matter:
-
-- what image?
-- from where?
-- built by whom?
-- running as which user?
-- with which mounts?
-- with which capabilities?
-- exposed through which ports?
-- reachable from which networks?
-- controlled through which daemon or orchestrator APIs?
+A better way to say it is: **containers do not reduce complexity; they make complexity portable.** That portability is powerful, but it also means mistakes become portable too. A bad Dockerfile, weak Compose configuration, leaked secret, vulnerable base image, or dangerous runtime flag can be copied across laptops, CI systems, test servers, and production environments. Containers are not a shortcut around architecture and security; they are a new layer of architecture and security that must be designed deliberately.

@@ -4,6 +4,30 @@ Container image security is not a side topic. In modern platforms, the image is 
 
 This lecture uses the same course application story we will keep improving during the week: a small containerized application stack with a backend, frontend, and database. Here we focus on the backend image, because it is the easiest place to see how bad image hygiene turns into real security risk.
 
+
+
+
+
+
+
+A safer image workflow should include:
+Use trusted base images.
+Pin image versions carefully.
+Prefer immutable digests for critical workloads.
+Scan images before deployment.
+Rebuild images regularly.
+Avoid stale base images.
+Review Dockerfiles and build pipelines.
+Avoid pulling random images directly into production.
+Monitor upstream security advisories.
+
+
+
+
+
+
+
+
 ## Why The Image Is The Problem
 
 When teams say "we run containers", what they often mean in practice is "we run whatever was baked into an image at build time". That image may contain:
