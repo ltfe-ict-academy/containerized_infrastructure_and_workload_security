@@ -1,808 +1,367 @@
 # Attack Surface In Containerized Environments
 
-- copy fail exmaple
-- Real-World Example: TeamTNT And Exposed Docker Management Surfaces
-- a list of real world container exploits with consequenses
+## Real-World Examples of Compromised Container Environments
 
-Containerized environments expand fast.
+### Tesla Kubernetes console cryptojacking incident
 
-That is exactly why their attack surface expands fast too.
+[Tesla’s cloud environment was compromised](https://www.wired.com/story/cryptojacking-tesla-amazon-cloud/) after attackers found a Kubernetes administrative console that was not password protected. From that console, they discovered credentials inside a Kubernetes pod that allowed access deeper into Tesla’s AWS environment. The attackers deployed cryptocurrency-mining scripts, using Tesla’s cloud compute resources for profit. Tesla said the issue was addressed within hours and that customer privacy and vehicle safety were not affected, but the incident still exposed sensitive internal data such as vehicle and mapping telemetry. 
 
-A traditional server might expose:
+**Main problem: an exposed, unauthenticated Kubernetes console and credentials stored inside a pod.**
 
-- one operating system
-- one application
-- one admin path
+### Malicious Docker Hub images by the docker123321 account
 
-A containerized environment often exposes:
+[In 2018, researchers found 17 malicious Docker images](https://threatpost.com/malicious-docker-containers-earn-crypto-miners-90000/132816/) on Docker Hub that contained cryptocurrency-mining malware. These images were downloaded roughly 5 million times before removal, and the attackers were estimated to have mined about $90,000 worth of Monero. Some images had mining software preinstalled, while others were intentionally misconfigured so the attacker could later access the running containers. The consequence was a container supply-chain compromise: users trusted public images and ran attacker-controlled code inside their environments. 
 
-- public application endpoints
-- published ports and reverse proxies
-- container images and registries
-- CI/CD and build workers
-- container runtime sockets
-- container daemon APIs
-- application accounts and tokens
-- host agents and scheduled jobs
-- Docker Compose files, unit files, and run scripts
-- secrets stores
-- metrics, logs, dashboards, and operational tooling
+**Main problem: untrusted public container images and poor image-vetting practices.**
 
-This module is about learning to see all of that at once.
+### Graboid Docker cryptojacking worm
 
-Many containerized applications are eventually deployed through orchestrators such as Kubernetes, but this module focuses on standalone or lightly managed container environments: Docker, Podman, containerd, Docker Compose, host networking, runtime sockets, volumes, registries, and the host operating system.
+[Graboid was reported by Palo Alto Networks Unit 42](https://unit42.paloaltonetworks.com/graboid-first-ever-cryptojacking-worm-found-in-images-on-docker-hub/) as the first known cryptojacking worm that spread through Docker Engine containers. It infected more than 2,000 unsecured Docker hosts by abusing exposed Docker daemons with no authentication. Once inside, it deployed Monero mining malware and periodically queried command-and-control infrastructure for new vulnerable Docker hosts to infect. Traditional endpoint tools often missed this activity because it happened inside containers. 
 
-The goal is not just to memorize a list of bad things. The goal is to build a way of thinking about the entire container threat landscape so that later modules on images, networking, and hardening feel coherent.
+**Main problem: Docker daemons exposed to the internet without authentication or authorization.**
+
+### Kinsing attacks against exposed Docker APIs
+
+[The Kinsing malware campaign](https://www.aquasec.com/blog/threat-alert-kinsing-malware-container-vulnerability/) targeted container environments by exploiting misconfigured Docker API ports. Attackers used the exposed Docker API to start an Ubuntu container, download scripts, install persistence, kill competing miners, and run Kinsing plus a cryptominer. Aqua Security observed that the malware attempted to spread to other containers and hosts after initial compromise. The consequence was resource hijacking, persistence inside the container environment, and potential lateral movement beyond the original container. 
+
+**Main problem: publicly exposed Docker API endpoints and weak runtime controls.**
+
+### Hildegard TeamTNT Kubernetes campaign
+
+[Hildegard was a TeamTNT-linked malware campaign](https://unit42.paloaltonetworks.com/hildegard-malware-teamtnt/) targeting Kubernetes clusters. The attackers gained initial access through a misconfigured kubelet that allowed anonymous access, then attempted to spread across as many containers as possible before launching cryptojacking. The malware used reverse shells, IRC command-and-control, process hiding, and payload encryption to remain stealthy. Unit 42 noted that hijacking a Kubernetes cluster is more profitable than compromising a single Docker host because a cluster can contain many nodes and containers. 
+
+**Main problem: kubelet anonymous access and insufficient Kubernetes hardening.**
+
+### Siloscape Windows container escape malware
+
+[Siloscape was identified](https://unit42.paloaltonetworks.com/siloscape/) as the first known malware targeting Windows containers to compromise Kubernetes environments. It targeted Windows Server containers, attempted to escape the container, and then abused Kubernetes node credentials to spread inside poorly configured clusters. Unit 42 identified active victims and warned that full cluster compromise could expose usernames, passwords, internal files, databases, and even enable ransomware or software supply-chain attacks. The key danger was that a single compromised container could become a path to the entire Kubernetes cluster. 
+
+**Main problem: treating Windows Server containers as a strong security boundary, combined with poor Kubernetes cluster configuration.**
+
+### SCARLETEEL Kubernetes-to-AWS cloud data theft
+
+[SCARLETEEL was a sophisticated cloud attack](https://www.sysdig.com/blog/cloud-breach-terraform-data-theft) discovered by Sysdig in a customer environment. The attacker first exploited a public-facing service in a self-managed Kubernetes cluster, gained access to a pod, and then pivoted into the victim’s AWS account. The attackers used cloud knowledge to escalate privileges, access AWS resources, steal proprietary software and credentials, and attempt further pivoting through Terraform state files. A cryptominer was also launched, possibly for profit or as a distraction, but the major consequence was data theft. 
+
+**Main problem: a vulnerable Kubernetes workload combined with overly permissive cloud credentials and poor cloud workload isolation**
+
+### LemonDuck botnet targeting Docker
+
+[LemonDuck, originally known for broader botnet and cryptomining activity](https://www.crowdstrike.com/en-us/blog/lemonduck-botnet-targets-docker-for-cryptomining-operations/), expanded into Docker environments. CrowdStrike found that LemonDuck targeted exposed Docker APIs to run malicious containers that downloaded disguised scripts and eventually launched XMRig cryptocurrency mining. The malware also attempted to evade detection by disabling Alibaba Cloud monitoring services and killing competing miner processes. It searched for SSH keys, creating a path for lateral movement beyond the original container host. 
+
+**Main problem: exposed Docker APIs, excessive container privileges, and weak host/container separation.**
+
+### Kiss-a-Dog Docker and Kubernetes cryptojacking campaign
+
+[Kiss-a-Dog was a CrowdStrike-observed cryptojacking campaign](https://www.crowdstrike.com/en-us/blog/new-kiss-a-dog-cryptojacking-campaign-targets-docker-and-kubernetes/) targeting vulnerable Docker and Kubernetes infrastructure. The campaign used multiple command-and-control servers, attempted container escape using host mounts, deployed rootkits, backdoored compromised containers, and tried to move laterally. The goal was cryptocurrency mining, but the tooling also supported persistence and stealth inside cloud-native environments. CrowdStrike highlighted misconfigured Docker or Kubernetes instances as a key detection point. 
+
+**Main problem: exposed container attack surface, host path mounts, and misconfigured Docker/Kubernetes deployments.**
 
 
+## Why Containers Change the Attack Surface
 
-## The Core Idea
+From a security perspective, many things remain the same in a containerized environment as in a traditional deployment. Attackers still want to steal data, modify how a system behaves, disrupt services, or abuse someone else’s compute resources for their own purposes, such as running cryptocurrency miners. **Moving an application into a container does not remove these motivations, and it does not automatically make the application secure.** A vulnerable web application is still vulnerable, weak credentials are still weak credentials, and exposed services are still exposed services.
 
-Containerized environments introduce a different attack surface than traditional servers because the workload, image, runtime, daemon, host, filesystem, network, and development pipeline are tightly connected.
+What containers change is **how the application runs and what exists around it**. In a traditional deployment, an application usually runs directly on a server or virtual machine, alongside its configuration files, system packages, logs, local users, and network interfaces. In a containerized deployment, the application is packaged into an image, started by a container runtime, connected to container networks, given environment variables, mounted volumes, and controlled by a daemon such as Docker. This creates new places where mistakes can happen and new paths an attacker can follow after the first compromise.
 
-```text
-Developer -> Source -> CI/CD -> Builder -> Registry -> Host -> Runtime -> Container -> App -> Data
-                                               |
-                                               +-> Monitoring / Logging / Admin APIs
+For example, imagine a simple web application with a command injection vulnerability. 
+- **In a traditional VM-based deployment**, an attacker who exploits that vulnerability may get command execution as the application user on the server. They might then look for local files, credentials, running processes, network access, or privilege escalation opportunities on that machine. 
+- **In a containerized deployment**, the initial vulnerability may be exactly the same, but the attacker lands inside a container. At first, this may sound safer because the attacker is “only in the container.” However, the real question is: what does that container have access to?
+
+The compromised container may contain environment variables with database credentials. 
+- It may be connected to an internal Docker network where the database, cache, admin panel, or message queue are reachable by service name. 
+- It may have a bind-mounted source code directory from the host. 
+- It may run as root inside the container. 
+- It may have extra Linux capabilities, access to host paths, or in the worst case, access to the Docker socket. In that situation, the container is not just a small isolated box; it becomes a stepping stone into other parts of the system.
+
+Consider a Docker Compose application with a web service, a database, and an admin interface:
+
+```yaml
+services:
+  web:
+    image: example-web-app
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_HOST=db
+      - DB_USER=app
+      - DB_PASSWORD=devpassword
+    volumes:
+      - ./app:/app
+
+  db:
+    image: postgres
+    environment:
+      - POSTGRES_PASSWORD=devpassword
+
+  admin:
+    image: adminer
+    ports:
+      - "9000:8080"
 ```
 
-An attacker does not need to break the hardest boundary.
+But from an attack surface perspective, several important questions appear:
+- The web application is exposed on port 8080. 
+- The admin interface is also exposed on port 9000. 
+- The web container contains database credentials in environment variables. 
+- The source code is mounted from the host into the container. 
+- The web container can likely reach the database by using the hostname db.
 
-They need to find the weakest one.
+Now imagine the web application is compromised. The attacker may be able to inspect the container environment, recover the database password, connect to the database over the internal Docker network, and access or modify application data. If the mounted `./app:/app` directory is writable, the attacker may also be able to modify application code on the host through the container. The original vulnerability was still just a web application bug, but container configuration changed the blast radius.
 
-That might be:
-- a public API route
-- a poisoned image
-- an exposed Docker API
-- an over-permissive application token
-- a management dashboard
-- a dangerous bind mount
-- a secret in logs
-- a CI runner with the Docker socket mounted
+This is the main reason containers change the attack surface: they introduce additional layers, boundaries, and control points. We now have to think not only about the application, but also about the image, runtime configuration, Docker daemon, mounted volumes, container networks, secrets, host interaction, and build process. Each of these can either reduce risk or accidentally create a new path for an attacker.
 
-That is why container security cannot be reduced to:
-- "scan the image"
-- "do not run as root"
-- "put it in a container"
+## Container Threat Model
 
-Those are useful controls, but they do not describe the whole system.
+**Threat modeling** is the process of asking, in a structured way, what we are protecting, who might attack it, how they could reach it, and what could happen if one part of the system is compromised. In containerized environments, this becomes especially important because the application is no longer just “running on a server.” It is built into an image, stored in a registry, pulled by a host, started by a runtime, connected to container networks, given configuration and secrets, and often managed through automation. A good container threat model therefore has to follow the workload across its whole lifecycle: from source code, to image build, to registry, to runtime, to host interaction.
 
-## A Practical Model for Container Attack Surface
+A useful way to think about this is that **containers create a chain of trust**. The developer writes source code, the build system turns it into an image, the registry stores that image, and the Docker host pulls and runs it as a container. This lifecycle is also used in container security research: [one survey on container threat modeling](https://arxiv.org/pdf/2111.11475) describes a data-flow model where application code and Dockerfiles move from a code repository, into an image build process, into a registry, and finally onto a Docker host where the image is deployed as a running container.
 
-| Surface               | Main question                                          |
-| --------------------- | ------------------------------------------------------ |
-| Application           | What can users or attackers interact with directly?    |
-| Image                 | What is inside the artifact being executed?            |
-| Runtime               | What privileges does the container have while running? |
-| Docker daemon         | Can the attacker control Docker itself?                |
-| Host                  | Can container access affect the host system?           |
-| Network               | What services are reachable from where?                |
-| Storage               | What filesystems or volumes cross boundaries?          |
-| Secrets/config        | What sensitive data is visible at runtime?             |
-| Registry/supply chain | Can the image source be trusted?                       |
-| Developer/CI          | Can the build or deployment process be abused?         |
-
-## Ways to Analyze the Threat Landscape
-
-- Asset-Based View -> What are we trying to protect?
-- Entry-Point View -> Where can an attacker enter?
-- Trust-Boundary View -> Where does data or control cross from one trust zone into another?
-- Attacker Path View -> If one part is compromised, what becomes reachable next?
-
-## Common frameworks
-- STRIDE for Containers
-- MITRE ATT&CK for Containers
-- NIST SP 800-190
-
-## Practical overview of Docker attack surfaces
-- Application Attack Surface
-- Image Attack Surface
-- Container Runtime Attack Surface
-- Docker Daemon and Docker Socket Attack Surface
-- Host Attack Surface
-- Network Attack Surface
-- Storage and Volume Attack Surface
-- Secrets and Configuration Attack Surface
-- Registry and Supply-Chain Attack Surface
-- Developer and CI/CD Attack Surface
-
-## Common Attack Vectors
-
-- Attack Vector 1: Web App Compromise → Container Discovery
-- Attack Vector 2: Web Container → Database Access
-- Attack Vector 3: Mounted Source Code → Tampering
-- Attack Vector 4: Docker Socket Exposure → Control Plane Abuse
-- Attack Vector 5: Privileged Container → Host Boundary Weakening
-- Attack Vector 6: Exposed Admin Interface
-- Attack Vector 7: Malicious or Unexpected Image Source
-- Attack Vector 8: Build Context Leakage
-
-#### Three Common Attacker Outcomes
-
-Most container attacks are easier to reason about if you ask what the attacker wants next:
-
-- data theft
-- compute theft
-- denial of service
-
-If a workload is exposed, attackers usually want one of those three outcomes first.
-
-#### A Defensible Mental Model For The Audience
-
-At the end of this lecture, participants should be able to look at a containerized environment and ask:
-
-1. What can the internet reach?
-2. What can one compromised container reach?
-3. What can the host reach?
-4. What can the runtime or management plane reach?
-5. What can the builder or registry influence?
-6. Which tokens or secrets unlock the next step?
-7. Which admin or monitoring systems see everything?
-
-That is the real container threat landscape.
-
-Not "containers are risky" in the abstract.
-
-But:
-
-"this environment has seven trust boundaries and four of them are weak."
-
-#### Good Discussion Prompts
-
-- Which attack vectors are most likely in our environment: image poisoning, app compromise, daemon exposure, or identity abuse?
-- If one container is compromised today, what is the most likely next step for the attacker?
-- Which component in our environment has the highest ratio of privilege to monitoring?
-- Which interfaces can bypass our normal audit path?
-- Are we more worried about data theft, compute theft, or denial of service?
+**The threat model should not only focus on dramatic container escape scenarios**. Those are important, but they are only one part of the picture. In practice, many container incidents start with something ordinary: a vulnerable web endpoint, a leaked password, an exposed admin panel, a bad image, a writable mount, or a CI job with too much access. The attacker may not need to “break Docker” if the deployment already gives them credentials, internal network access, or control over the Docker daemon.
 
 
-## Ways To Analyze The Threat Landscape
+### Threat Actors
 
-The same environment can be analyzed from several useful angles. Strong security teams switch between these lenses instead of using only one.
+The first step is to identify the actors that may interact with the system. In a traditional application, we often think mainly about external attackers and legitimate users. In containerized environments, we also need to consider developers, CI/CD systems, registries, administrators, automation containers, and even application processes themselves.
 
-### 1. Analyze By Lifecycle
+An **external attacker** is someone outside the environment. They may reach the system through a published port, a public web application, an exposed API, a misconfigured admin panel, or an exposed Docker API. Their starting position is usually limited, but if the first service they compromise contains secrets or internal network access, their reach can expand quickly.
 
-This is the easiest model for people new to container security.
+An **internal attacker** already has access to some part of the deployment. This could be a compromised container, a stolen developer account, a foothold on the Docker host, or access to an internal network. Internal attackers are dangerous because many containerized environments trust internal traffic too much. For example, a database or cache service may not be exposed to the internet, but it may still be reachable from every container on the same Docker network.
 
-Think in stages:
+A **malicious internal actor** is someone who legitimately has some access but abuses it. This could be a developer who can modify a Dockerfile, a user who can push images to a registry, an administrator who can access the Docker host, or a CI/CD maintainer who can change build scripts. In a containerized environment, these roles are powerful because modifying an image or deployment configuration can change what code eventually runs in production.
 
-1. source and developer workstation
-2. build system and CI/CD
-3. image and registry
-4. deployment configuration
-5. runtime and host
-6. post-compromise movement and impact
+An **arbitrary internal actor** is not malicious but can still create risk. A developer may accidentally commit a `.env` file, copy a private key into an image, use latest tags in production, expose a database port during testing, or run an internet-sourced Compose file without checking its privileges. Many container security problems come from convenience decisions that were never meant to become production behavior.
 
-Useful question:
+Finally, we should also model application processes as actors. A process is not malicious by itself, but if it is compromised or behaves unexpectedly, its permissions matter. A web process that can read environment variables, write to mounted host directories, connect to internal services, or access the Docker socket becomes an important security actor once an attacker controls it.
 
-where can an attacker insert, modify, steal, or execute something at each stage?
 
-### 2. Analyze By Layer
+### What Permissions Does Each Actor Have?
 
-This is the most practical operational model.
+In a Docker-focused environment, permissions usually come from three places: 
+- **Credentials** include application passwords, database users, API tokens, registry credentials, SSH keys, TLS private keys, CI/CD secrets, and cloud credentials. A developer with registry credentials may be able to push a new image. A compromised web container with database credentials may be able to read or modify data. A CI runner with deployment credentials may be able to change what runs in production.
+- **System privileges** include access to the Docker host, membership in the docker group, access to the Docker socket, file permissions on mounted directories, and container runtime settings such as privileged: true, added Linux capabilities, host networking, or host PID mode. These permissions define how far an attacker can go after compromising a container.
+- **Network access** determines what the actor can reach. A public user may only reach the web service, while a compromised web container may reach the database, Redis, an admin panel, metrics endpoints, internal APIs, or the Docker daemon if it has been exposed. This distinction is important: a service does not need to be public to be part of the attack path.
 
-Think in layers:
+### Ways to Analyze the Threat Landscape
 
-- application
-- container image
-- container runtime
-- host OS
-- host management layer
-- network and service exposure
-- identity and secrets
-- observability and operations plane
+#### Asset-Based View: What Are We Trying to Protect?
+The asset-based view starts with valuable things in the system. This is useful because it prevents us from focusing only on technical components and forgetting the actual business impact. In a containerized environment, assets include:
+- Application source code
+- Database data
+- API tokens
+- TLS certificates
+- Docker host
+- Docker socket
+- Container images
+- Registry credentials
+- CI/CD secrets
+- Mounted files
+- Internal services
+- Logs
 
-Useful question:
+For each asset:
+- Where does this asset live?
+- Who can access it?
+- Which container can read it?
+- Can it be copied into an image?
+- Can it appear in logs?
+- Can it be accessed through a mounted volume?
+- What happens if it is modified or deleted?
 
-what high-value interface exists at each layer, and who should be allowed to touch it?
+For example, database data may live in a named Docker volume. The database container obviously needs access to it, but the threat model should ask whether any other container can access that same volume, whether the database port is published, whether credentials are stored in environment variables, and whether backup files are mounted into another service.
 
-### 3. Analyze By Attacker Path
+#### Entry-Point View: Where Can an Attacker Enter?
+The entry-point view looks for places where input, access, or control enters the system.
 
-This is the "kill chain" mindset.
+Common Docker-oriented entry points include:
+- Published ports
+- Web endpoints
+- Admin panels
+- Debug endpoints
+- Exposed metrics endpoints
+- Uploaded files
+- Container logs
+- Mounted volumes
+- Docker API
+- Compromised image
+- Malicious dependency
+- Developer laptop
+- CI runner
 
-Start from likely attacker goals:
+#### Trust-Boundary View: Where Does Control Cross Zones?
+A trust boundary exists wherever data or control moves from one zone into another. Containers introduce many such boundaries. Important boundaries include:
+- Internet → container
+- container → container
+- container → host
+- container → Docker daemon
+- developer → registry
+- CI/CD → registry
+- registry → production host
+- container → mounted filesystem
+- container → secret store
 
-- initial access
-- execution
-- credential access
-- privilege escalation
-- lateral movement
-- impact
+#### Attacker Path View: If One Part Is Compromised, What Becomes Reachable?
 
-MITRE ATT&CK for Containers is excellent for this style of analysis.
+The attacker path view connects individual findings into realistic chains. A single issue may look minor in isolation, but serious when combined with others.
+- Attack Path 1: Public App To Local Secrets
+    1. Exploit a vulnerable API endpoint in a public-facing container.
+    2. Get code execution in the container.
+    3. Read mounted secrets, `.env` files, or application config.
+    4. Reuse those credentials against Redis, PostgreSQL, a registry, or a cloud API.
+    5. If the container can reach the runtime socket, start a more privileged container.
+    6. Use the new access to move into data stores, host files, or other containers.
+- Attack Path 2: Exposed Docker API To Host Compromise
+    1. Find Docker Remote API exposed on TCP.
+    2. Start a new privileged container or one with host filesystem mounts.
+    3. Chroot into the host or steal host secrets.
+    4. Persistence or data theft follows.
+- Attack Path 3: CI Pipeline To Production Compromise
+    1. Abuse a CI job, compromised runner, or malicious dependency.
+    2. Insert a malicious image or implant build-time artifact.
+    3. Push to the trusted registry path.
+    4. Wait for deployment.
+    5. Gain runtime access inside production under a trusted image name.
+- Attack Path 4: Low-Privilege Container To Host
+    1. Land in a container through application compromise.
+    2. Discover the container has a sensitive bind mount, runtime socket, or elevated capabilities.
+    3. Interact with the runtime or host filesystem.
+    4. Escape to the host or gain host-level influence.
+    5. From the host, scrape tokens, registry credentials, logs, or data from other containers.
+- Attack Path 5: Monitoring Plane As A Shortcut
+    1. Find an exposed dashboard or logging UI.
+    2. Reuse weak credentials or exploit poor auth.
+    3. Read logs containing secrets, tokens, or internal endpoints.
+    4. Pivot into containers, databases, management APIs, or the runtime socket.
 
-### 4. Analyze By Trust Boundary
+### Common Frameworks for Thinking About Container Threats
 
-This is the most architectural approach.
+#### STRIDE for Containers
 
-Ask where trust changes:
+STRIDE is not container-specific, but it works very well for containerized environments when applied per [trust boundary](https://www.cavirin.com/blog/26-docker/77-docker-container-security-and-stride.html).
 
-- internet to ingress
-- developer to CI
-- CI to registry
-- registry to host
-- container to host
-- host to runtime daemon
-- workload to data store
-- workload to secrets provider
+| STRIDE category        | Container example                                                    |
+| ---------------------- | -------------------------------------------------------------------- |
+| Spoofing               | Attacker uses stolen registry credentials to push an image           |
+| Tampering              | Container modifies a mounted host directory                          |
+| Repudiation            | Container creation or image push is not logged                       |
+| Information disclosure | Secrets are visible in environment variables                         |
+| Denial of service      | Container consumes excessive CPU, memory, or network                 |
+| Elevation of privilege | Privileged container or Docker socket access enables broader control |
 
-Useful question:
 
-what assumption are we making at this boundary, and what happens if that assumption is false?
+#### MITRE ATT&CK For Containers
 
-## Common Frameworks
+[MITRE ATT&CK for Containers](https://attack.mitre.org/matrices/enterprise/containers/#) is useful because it describes adversary behavior using container-specific tactics and techniques. MITRE states that the Containers matrix represents tactics and techniques known to target container technologies and container orchestration systems.
 
-### MITRE ATT&CK For Containers
+| Finding                          | ATT&CK-style interpretation        |
+| -------------------------------- | ---------------------------------- |
+| Public vulnerable web app        | Initial Access                     |
+| Shell inside container           | Execution                          |
+| Secrets in environment variables | Credential Access                  |
+| Listing containers and services  | Discovery                          |
+| Web container reaches database   | Lateral Movement / Collection      |
+| Docker socket mounted            | Privilege Escalation / Escape path |
+| Crypto miner in container        | Resource Hijacking / Impact        |
 
 ![MITRE ATT&CK for Containers](./images/img_01.png)
 
-<!-- Source: https://attack.mitre.org/matrices/enterprise/containers/# -->
+Source: https://attack.mitre.org/matrices/enterprise/containers/#
 
-MITRE maintains a dedicated Containers matrix. As of the currently published matrix, it organizes attacker behavior across these tactics:
+#### NIST SP 800-190
 
-- Initial Access
-- Execution
-- Persistence
-- Privilege Escalation
-- Defense Evasion
-- Credential Access
-- Discovery
-- Lateral Movement
-- Impact
-
-Examples in the matrix include:
-
-- Exploit Public-Facing Application
-- External Remote Services
-- Container Administration Command
-- Deploy Container
-- Malicious Image
-- Escape to Host
-- Build Image on Host
-- Unsecured Credentials
-- Container API
-- Container and Resource Discovery
-- Resource Hijacking
-
-Why it matters:
-
-- it gives defenders a common language
-- it helps link isolated incidents into repeatable attacker behavior
-- it is more useful than a random list of "bad things" because it preserves attacker intent
-
-### NIST SP 800-190
-
-NIST SP 800-190 is still one of the best foundational references because it treats containers as a full stack of security concerns instead of just a runtime feature.
-
-It is especially useful for:
-
-- component-based analysis
-- control mapping
-- planning and architecture
-- explaining container-specific concerns to non-specialists
-
-Why it matters:
-
-- it forces people to think beyond the container process itself
-- it is a useful bridge between security engineering and governance
-
-### STRIDE
-
-STRIDE is not container-specific, but it works very well for containerized environments when applied per trust boundary.
-
-Example:
-
-- Spoofing: fake workload identity, stolen application token, registry impersonation
-- Tampering: malicious image, modified manifest, poisoned build artifact
-- Repudiation: weak audit trails around `docker exec`, runtime access, or registry changes
-- Information Disclosure: secrets in env vars, mounted files, image layers, or logs
-- Denial of Service: host resource exhaustion, daemon/API flooding, image-pull storms
-- Elevation of Privilege: privileged containers, bind mounts, runtime socket, broad daemon access
-
-Why it matters:
-
-- it helps architects think systematically instead of tactically
+[NIST SP 800-190](https://csrc.nist.gov/pubs/sp/800/190/final) is useful as a baseline reference because it organizes container security around core container components and risks. It describes containers as operating-system virtualization combined with application packaging, and it provides guidance on security concerns for containerized applications. NIST is useful because it reinforces the idea that container risk is not only a runtime problem. It includes images, registries, containers, host operating systems, and supporting processes.
 
 
-## A practical overview of the attack surface
+## Practical Overview of the Docker Attack Surface
 
-The easiest mistake in container security is to focus only on the container.
+The easiest mistake in container security is to focus only on “the container.” In reality, the attack surface is much larger. A containerized workload passes through source code, dependencies, Dockerfiles, build systems, registries, hosts, runtimes, networks, volumes, secrets, logs, and operational tooling before it becomes a running application.
 
-The actual attack surface is much larger.
+A practical threat model should therefore follow the container lifecycle:
+```
+Developer -> Source Code -> CI/CD -> Builder -> Image -> Registry -> Host -> Runtime -> Container -> App -> Data
+                                                                  |
+                                                                  +-> Logs / Monitoring / Admin APIs
+```
 
-## 1. Public Application Surface
+An attacker does not need to break the strongest boundary. They only need to find the weakest link in this chain.
 
-This is where many attacks begin.
+| Lifecycle stage                 | Main security question                                                                       |
+| ------------------------------- | -------------------------------------------------------------------------------------------- |
+| Source code and dependencies    | What vulnerabilities or malicious code enter before the image is built?                      |
+| Dockerfile and image build      | What gets packaged into the image, including tools, users, secrets, and vulnerable packages? |
+| CI/CD and builder               | Can the build process be abused to create or publish a malicious artifact?                   |
+| Registry and image distribution | Can attackers push, replace, poison, or pull images they should not access?                  |
+| Docker host and daemon          | Can attackers control the runtime or host through Docker management interfaces?              |
+| Runtime configuration           | What privileges does the container receive when it starts?                                   |
+| Network                         | What services become reachable from the internet, the host, or other containers?             |
+| Storage and volumes             | What host files, persistent data, or shared volumes cross security boundaries?               |
+| Secrets and configuration       | What sensitive values are visible to the container after compromise?                         |
+| Observability and operations    | Can logs, dashboards, monitoring agents, or admin tools become attack paths?                 |
 
-Attack vectors:
 
-- vulnerable web applications
+### Source Code and Dependency Attack Surface
+
+The lifecycle begins before Docker is involved. Application bugs still matter in containers. SQL injection, command injection, SSRF, insecure deserialization, authentication bypasses, broken access control, and vulnerable third-party libraries do not disappear because the application is packaged as an image. The difference is what happens after exploitation.
+
+In a traditional deployment, a command injection vulnerability may give the attacker command execution on a virtual machine. In a containerized deployment, the same vulnerability may give the attacker command execution inside a container. That may sound safer, but the important question is: what does that container have access to?
+
+Attack vectors include:
+- vulnerable web routes
 - vulnerable APIs
-- weak authentication and session handling
-- exposed admin panels
-- SSRF into internal services
-- file upload abuse
 - command injection
-- deserialization bugs
-- debug endpoints
-- GraphQL overexposure
-- weak rate limits
+- SQL injection
+- SSRF into internal services
+- insecure file uploads
+- insecure deserialization
+- authentication bypasses
+- vulnerable application dependencies
+- malicious or typosquatted packages
+- exposed debug endpoints
+- over-permissive GraphQL or admin APIs
 
-Practical example:
+**The key lesson: containerization changes the landing zone, not the existence of application vulnerabilities.**
 
-a remote code execution flaw in a web application running inside a container does not stay "inside the app" for long if the container also has:
+### Dockerfile and Image Attack Surface
 
-- mounted secrets or `.env` files
-- metadata access
-- internal network reachability
-- access to Redis, PostgreSQL, or message queues
+The image is the artifact that will eventually run. If the image contains risky defaults, unnecessary tools, secrets, malware, vulnerable packages, or dangerous configuration, those risks travel with the image into every environment where it is deployed.
 
-That one bug can become internal discovery, secret theft, and lateral movement.
+Image-level attack vectors include:
+- using untrusted public base images
+- using large full-OS images when a smaller image would be enough
+- stale packages and vulnerable libraries
+- unnecessary shells, package managers, compilers, curl, wget, or debugging tools
+- SSH servers inside production containers
+- images that run as root by default
+- secrets copied into image layers
+- sensitive files included through a broad build context
+- missing or weak .dockerignore
+- unverified downloads in the Dockerfile
+- curl | sh installation patterns
+- mutable tags such as latest
+- missing image signing or provenance
+- vulnerable application dependencies baked into the image
 
-## 2. Edge, Proxy, And Published-Port Surface
 
-Teams often underestimate this layer because it feels like infrastructure plumbing.
+### CI/CD and Builder Attack Surface
 
-Attack vectors:
 
-- exposed reverse-proxy dashboards
-- weak TLS configuration
-- path confusion or rewrite mistakes
-- default credentials on proxy dashboards or admin panels
-- auth bypass in edge middleware
-- request smuggling and header trust issues
-- accidental exposure of internal routes
-- mis-scoped wildcard hosts
-- leaking backend services directly through published ports
+- DODAMO SLIKO 
+- https://chatgpt.com/c/6a0477c0-c514-8331-a1a1-444d14427660
 
-Practical example:
 
-the frontend might look fine, but the edge may still expose:
 
-- `/metrics`
-- `/debug`
-- `/api/admin`
-- a dashboard
-- an internal health route
 
-This is why networking and exposure decisions matter as much as code quality.
 
-## 3. Image, Registry, And Supply Chain Surface
 
-This is where attackers can compromise what will later run everywhere.
 
-Attack vectors:
 
-- malicious or typosquatted images
-- compromised maintainer accounts
-- poisoned base images
-- mutable tags
-- weak registry permissions
-- leaked registry credentials
-- missing signature verification
-- missing provenance
-- vulnerable dependencies and OS packages
-- secrets baked into images
-- broad build context including sensitive files
-- compromised Compose files, unit files, or deployment scripts
 
-Practical example:
 
-an attacker who cannot touch production directly may still win by:
 
-1. stealing registry credentials
-2. pushing a malicious image under a trusted repository path
-3. waiting for the next restart, pull, or deployment script
 
-That turns supply chain trust into runtime compromise.
 
-## 4. Build System And CI/CD Surface
 
-The builder is one of the most powerful and most overlooked attack surfaces in modern platforms.
 
-Attack vectors:
 
-- CI runners with Docker socket access
-- BuildKit misuse or unsafe entitlements
-- untrusted BuildKit frontends
-- malicious pull requests in insecure pipelines
-- secret exposure in build logs
-- artifact poisoning
-- build cache abuse
-- shared runners with weak tenant isolation
-- leaked signing keys or deployment tokens
-- compromised GitHub Actions or CI plugins
 
-Practical example:
 
-if a CI runner can reach `/var/run/docker.sock`, a malicious pipeline step may be able to:
 
-- start privileged containers
-- mount the host filesystem
-- steal cached credentials
-- inspect other build artifacts
-
-That is not "just a build issue". It is an infrastructure compromise path.
-
-## 5. Host Management And Runtime Control Surface
-
-This is the management layer of a standalone container environment. If it is weak, everything running on the host becomes easier to abuse.
-
-High-value targets include:
-
-- Docker or Podman remote APIs
-- `/var/run/docker.sock`
-- containerd sockets
-- SSH access to container hosts
-- Docker Compose files
-- systemd unit files that start containers
-- registry credentials stored on the host
-- local admin dashboards such as Portainer
-- backup, patching, and deployment scripts
-
-Attack vectors:
-
-- exposed Docker daemon on TCP
-- weakly protected management dashboards
-- users in the `docker` group without strong controls
-- CI jobs or helper containers with the runtime socket mounted
-- writable Compose files or unit files
-- scripts that pull mutable tags without verification
-- broad host filesystem mounts
-- unattended host agents with privileged access
-- reused admin credentials across hosts
-- weak audit trails around manual `docker exec` or `docker run`
-
-Practical example:
-
-a host may have no internet-facing application vulnerability, but a remote Docker API exposed on TCP can still let an attacker create a privileged container, mount `/`, and read or change host files.
-
-This is a major lesson:
-
-not every powerful action goes through the application. Runtime and host-management interfaces are control planes too.
-
-## 6. Host And Runtime Surface
-
-This is where "container" becomes "host risk."
-
-Attack vectors:
-
-- privileged containers
-- host PID, IPC, or network namespace sharing
-- bind mounts into sensitive host paths
-- mounted Docker or container runtime sockets
-- root inside the container
-- extra Linux capabilities such as `SYS_ADMIN`
-- missing seccomp / AppArmor / SELinux confinement
-- weak user namespace settings
-- runtime vulnerabilities in `runc`, containerd, or related components
-- exposed device plugins
-- writable procfs or sysfs abuse
-- kernel attack surface shared with containers
-
-Practical example:
-
-these are all very different-looking settings:
-
-- `--privileged`
-- `-v /:/host`
-- `-v /var/run/docker.sock:/var/run/docker.sock`
-- `--pid=host`
-
-But from the attacker's point of view they all say roughly the same thing:
-
-"the host boundary is now negotiable."
-
-## 7. Identity, Credentials, And Secrets Surface
-
-This is one of the most common lateral movement paths.
-
-Attack vectors:
-
-- application token theft
-- cloud metadata service abuse
-- Docker credentials left on developer systems
-- secrets in environment variables
-- secrets in image layers
-- secrets in CI logs
-- secrets in Compose files or `.env` files
-- long-lived tokens
-- broad admin tokens mounted into containers
-- registry creds mounted into containers
-- leaked TLS private keys
-
-Practical example:
-
-a single compromised container may reveal:
-
-- database credentials
-- Redis passwords
-- registry auth
-- cloud IAM tokens
-- host or deployment tokens
-- internal API keys
-
-The attacker does not need a breakout if the secrets already give them the next step.
-
-## 8. Network And Service Discovery Surface
-
-Flat networks make post-compromise work much easier.
-
-Attack vectors:
-
-- no host firewall or network segmentation
-- backend and data services reachable from too many containers
-- container-network service discovery abuse
-- internal DNS reconnaissance
-- direct container-to-container lateral movement
-- exposed host ports
-- insecure east-west traffic
-- metadata service reachability
-- unauthenticated internal HTTP services
-- weak proxy, sidecar, or local DNS configuration
-
-Practical example:
-
-after landing in one container, attackers often do not need an exploit for the next step.
-
-They just:
-
-1. enumerate DNS names
-2. probe common ports
-3. find Redis, PostgreSQL, Elasticsearch, dashboards, or internal APIs
-4. try default creds, weak creds, or stolen tokens
-
-## 9. Data And Storage Surface
-
-Persistence and storage layers are rich targets because they often hold the real business value.
-
-Attack vectors:
-
-- exposed databases
-- insecure object storage
-- writable shared volumes
-- snapshot theft
-- backup theft
-- Docker volume or bind-mount abuse
-- volumes reused across trust boundaries
-- secrets copied into mounted storage
-- weak database authentication inside the container network
-
-Practical example:
-
-teams often lock down the application more than the data path. Once an attacker reaches the data store, the container boundary stops mattering very much.
-
-## 10. Observability And Operations Surface
-
-This is the layer defenders love and attackers love too.
-
-Attack vectors:
-
-- exposed Grafana, Kibana, Prometheus, or dashboards
-- over-permissive monitoring agents
-- runtime socket mounted into collectors
-- sensitive logs
-- trace data containing credentials or tokens
-- alerting webhooks with secrets
-- admin UIs without SSO or MFA
-- eBPF or host-monitoring agents with broad privilege
-
-Practical example:
-
-an observability agent may have:
-
-- host-wide visibility
-- Docker or containerd socket access
-- access to logs from every container
-- permissions to scrape host and runtime metrics
-
-That makes it both a great defensive control and a great attack target.
-
-## Common Attack Vectors
-
-If you want the shortest practical list to remember, remember these.
-
-## Very Common Initial Access Paths
-
-- exploit a public-facing application
-- steal valid credentials
-- abuse exposed Docker API
-- abuse exposed container-management dashboards
-- abuse SSH or remote management on the container host
-- pull a malicious image into the environment
-- compromise CI/CD
-- target dashboards, reverse proxies, and admin UIs
-
-## Very Common Privilege Escalation Paths
-
-- privileged container
-- sensitive bind mount
-- mounted runtime socket
-- root container plus weak runtime restrictions
-- broad access to the Docker or Podman daemon
-- membership in the `docker` group
-- application or deployment token with too much scope
-- runtime or kernel vulnerability
-
-## Very Common Lateral Movement Paths
-
-- steal application, registry, or deployment tokens
-- read secrets from environment or mounted files
-- discover internal services on flat networks
-- use host admin or dashboard credentials
-- pivot via SSH or runtime socket
-- poison internal images or jobs
-
-## Very Common Impact Paths
-
-- data theft
-- cryptomining / compute hijacking
-- destructive container, image, or volume deletion
-- backup and snapshot theft
-- denial of service through resource exhaustion
-- log wiping or defense impairment
-
-## Practical Attack Chains That Make This Real
-
-Attackers usually chain weak points. That is what makes container security interesting and dangerous.
-
-## Attack Chain 1: Public App To Local Secrets
-
-1. Exploit a vulnerable API endpoint in a public-facing container.
-2. Get code execution in the container.
-3. Read mounted secrets, `.env` files, or application config.
-4. Reuse those credentials against Redis, PostgreSQL, a registry, or a cloud API.
-5. If the container can reach the runtime socket, start a more privileged container.
-6. Use the new access to move into data stores, host files, or other containers.
-
-Why it works:
-
-- app exposure
-- local secret exposure
-- internal service reachability
-- weak separation between application runtime and host management
-
-## Attack Chain 2: Exposed Docker API To Host Compromise
-
-1. Find Docker Remote API exposed on TCP.
-2. Start a new privileged container or one with host filesystem mounts.
-3. Chroot into the host or steal host secrets.
-4. Persistence or data theft follows.
-
-Why it works:
-
-- the daemon is a control plane
-- remote daemon access is effectively host access if poorly secured
-
-This is one reason Microsoft observed TeamTNT targeting exposed Docker management surfaces.
-
-## Attack Chain 3: CI Pipeline To Production Compromise
-
-1. Abuse a CI job, compromised runner, or malicious dependency.
-2. Insert a malicious image or implant build-time artifact.
-3. Push to the trusted registry path.
-4. Wait for deployment.
-5. Gain runtime access inside production under a trusted image name.
-
-Why it works:
-
-- teams trust the pipeline more than they verify artifacts
-
-## Attack Chain 4: Low-Privilege Container To Host
-
-1. Land in a container through application compromise.
-2. Discover the container has a sensitive bind mount, runtime socket, or elevated capabilities.
-3. Interact with the runtime or host filesystem.
-4. Escape to the host or gain host-level influence.
-5. From the host, scrape tokens, registry credentials, logs, or data from other containers.
-
-Why it works:
-
-- host-level trust is far wider than container-level trust
-
-## Attack Chain 5: Monitoring Plane As A Shortcut
-
-1. Find an exposed dashboard or logging UI.
-2. Reuse weak credentials or exploit poor auth.
-3. Read logs containing secrets, tokens, or internal endpoints.
-4. Pivot into containers, databases, management APIs, or the runtime socket.
-
-Why it works:
-
-- observability systems often see everything
-- teams frequently protect them less than they should
-
-## Practical Demo Examples
-
-## Example 1: The "It Is Internal" Redis
-
-An attacker compromises one container and starts checking service names:
-
-- `redis`
-- `postgres`
-- `grafana`
-- `prometheus`
-- `elasticsearch`
-
-If the container network is flat and internal services have weak auth, "internal only" becomes "reachable by the attacker."
-
-Lesson:
-
-internal reachability is not a defense after the first compromise.
-
-## Example 2: The Helpful CI Runner
-
-A team mounts `/var/run/docker.sock` into a CI runner because it makes builds easy.
-
-A malicious build step now has a path to:
-
-- start sibling containers
-- inspect images
-- mount host paths
-- extract secrets
-
-Lesson:
-
-convenience paths are often privilege paths.
-
-## Example 3: The Over-Permissive Application Token
-
-A developer says:
-
-"The container only needs to call one internal API."
-
-But the token mounted into the container actually has:
-
-- access to production database records
-- permission to pull private images
-- access to deployment scripts or admin endpoints
-- broad read access across internal services
-
-After application compromise, that token becomes a second-stage credential.
-
-Lesson:
-
-containers inherit identity mistakes instantly.
-
-## Example 4: The Monitoring Stack That Became The Target
-
-A monitoring collector has:
-
-- host-wide log access
-- container runtime visibility
-- runtime socket access
-- no strong auth on its UI
-
-Attackers love this because it compresses discovery, credential theft, and operational intelligence into one target.
-
-Lesson:
-
-security and observability tooling can become privileged attack surfaces.
-
-## Example 5: The Registry Nobody Threat-Modeled
-
-The application team patches the code, the host team patches the OS, and everybody feels disciplined.
-
-Meanwhile:
-
-- registry credentials are shared too widely
-- image signing is not enforced
-- mutable tags are used for deployment
-
-An attacker only needs to win once at the registry layer.
-
-Lesson:
-
-control planes and supply chains matter as much as the workload.
-
-
-
-## References
-
-- MITRE ATT&CK Containers Matrix: <https://attack.mitre.org/matrices/enterprise/containers/>
-- NIST SP 800-190, *Application Container Security Guide*: <https://csrc.nist.gov/pubs/sp/800/190/final>
-- Docker Engine security overview: <https://docs.docker.com/engine/security/>
-- Docker daemon remote access warning: <https://docs.docker.com/engine/daemon/remote-access/>
-- Protect the Docker daemon socket: <https://docs.docker.com/engine/security/protect-access/>
-- Docker Linux post-install warning that the `docker` group grants root-level privileges: <https://docs.docker.com/engine/install/linux-postinstall>
-- Microsoft case study on TeamTNT targeting exposed Docker API and unauthenticated Weave Scope, published September 8, 2020: <https://techcommunity.microsoft.com/t5/azure-security-center/teamtnt-activity-targets-weave-scope-deployments/ba-p/1645968>

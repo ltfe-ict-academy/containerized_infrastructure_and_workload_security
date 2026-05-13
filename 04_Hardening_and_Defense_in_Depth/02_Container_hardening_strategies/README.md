@@ -18,6 +18,9 @@ These show up constantly:
 If a team does several of these, the environment is only cosmetically hardened.
 
 
+- https://docs.docker.com/dhi/core-concepts/cis/
+- https://www.cavirin.com/blog/26-docker/77-docker-container-security-and-stride.html
+
 ## Host and daemon hardening
 
 ### Keep the host OS, kernel, Docker Engine, Docker Compose, and container runtime updated
