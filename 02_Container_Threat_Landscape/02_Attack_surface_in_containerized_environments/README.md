@@ -297,6 +297,8 @@ An attacker does not need to break the strongest boundary. They only need to fin
 | Secrets and configuration       | What sensitive values are visible to the container after compromise?                         |
 | Observability and operations    | Can logs, dashboards, monitoring agents, or admin tools become attack paths?                 |
 
+![Container attack surface](./images/img_02.png)
+
 
 ### Source Code and Dependency Attack Surface
 

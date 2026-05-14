@@ -2,7 +2,7 @@
 
 ## Lecture Sequence
 
-- [Exploiting Web Apps, The Poster Child For Cloud Services](./01_Exploiting_web_apps_the_poster_child_for_cloud_services/README.md)
+
 - [Container Hardening Strategies](./02_Container_hardening_strategies/README.md)
 - [Managing Secrets In Containerized Environments](./03_Managing_Secrets_in_Containerized_Environments/README.md)
 - [Container Monitoring And Observability](./04_Container_Monitoring_and_Observability/README.md)
