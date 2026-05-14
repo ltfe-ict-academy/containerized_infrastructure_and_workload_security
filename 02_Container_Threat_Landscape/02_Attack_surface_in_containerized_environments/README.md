@@ -343,25 +343,182 @@ Image-level attack vectors include:
 
 ### CI/CD and Builder Attack Surface
 
+The build pipeline is part of the attack surface because it decides what code becomes an image and what image is allowed to reach the registry. CI/CD systems are powerful because they often have access to source code, build secrets, registry credentials, signing keys, deployment tokens, and sometimes Docker itself. OWASP notes that CI/CD pipelines increase an organization’s attack surface and are attractive targets because pipeline steps are often executed with privileged identities.
 
-- DODAMO SLIKO 
-- https://chatgpt.com/c/6a0477c0-c514-8331-a1a1-444d14427660
+Attack vectors include:
+- malicious pull requests in insecure pipelines
+- poisoned pipeline configuration
+- CI jobs with access to production secrets
+- CI runners with `/var/run/docker.sock` mounted
+- shared runners with weak isolation
+- leaked registry credentials
+- leaked signing keys
+- untrusted CI plugins or actions
+- dependency confusion
+- typosquatted packages
+- compromised package maintainer accounts
+- build cache poisoning
+- artifact replacement
+- weak branch protection
+- missing review before production deployment
+- secrets printed into build logs
 
 
+### Registry and Image Distribution Attack Surface
+
+The registry is where built images are stored and distributed. If attackers can push to the registry, replace an image, steal registry credentials, or trick systems into pulling the wrong image, they may compromise runtime environments without directly attacking the production host.
+
+Attack vectors include:
+- weak registry authentication
+- leaked registry tokens
+- over-permissive push access
+- public images used without review
+- malicious Docker Hub images
+- typosquatted image names
+- mutable tags such as latest
+- missing signature verification
+- missing provenance
+- stale images left available
+- image rollback to a vulnerable version
+- compromised maintainer accounts
+- internal image poisoning
+
+The important point is that registry trust becomes runtime trust. If the deployment process trusts whatever is behind a tag, then control of the tag can become control of production.
+
+### Docker Host and Docker Daemon Attack Surface
+
+Containers run on hosts. The host contains the kernel, Docker Engine, container runtime, images, volumes, logs, network rules, and often local credentials or deployment scripts. A weak host can undermine every container running on it.
+
+The Docker daemon is especially sensitive. Docker documentation warns that only trusted users should control the daemon, because Docker can start containers with host filesystem access. Docker also warns that exposing the daemon API over HTTP has serious security implications and should be secured with HTTPS certificates and limited to trusted networks or VPNs.
+
+Host and daemon attack vectors include:
+- exposed Docker API
+- exposed Docker daemon over TCP
+- weak SSH access to the Docker host
+- too many users in the docker group
+- vulnerable host kernel
+- outdated Docker Engine
+- writable Docker Compose files
+- writable systemd unit files
+- registry credentials stored on the host
+- local management dashboards such as Portainer
+- weak host filesystem permissions
+- insufficient logging around docker exec, docker run, or image pulls
+- backup scripts or deployment scripts with excessive privilege
+
+### Runtime Configuration Attack Surface
+
+The same image can be relatively safe or extremely dangerous depending on how it is run. Runtime configuration decides whether the container runs as root, whether it is privileged, which Linux capabilities it receives, which namespaces it shares, whether it can write to the filesystem, which devices it can access, and whether kernel hardening features apply.
+
+Dangerous runtime settings include:
+- `privileged: true`
+- running as root
+- `--cap-add=SYS_ADMIN`
+- `--cap-add=NET_ADMIN`
+- `--cap-add=SYS_PTRACE`
+- host network mode
+- host PID namespace
+- host IPC namespace
+- access to host devices
+- disabled seccomp profile
+- disabled AppArmor or SELinux confinement
+- writable root filesystem
+- broad bind mounts
+- mounted Docker socket
 
 
+### Network and Service Reachability Attack Surface
 
+Container networking creates both useful connectivity and accidental reachability. A database may need to be reachable from the web application, but not from the internet. A metrics endpoint may need to be reachable from monitoring, but not from every container. An admin interface may be useful locally, but dangerous if published to all interfaces.
 
+Network attack vectors include:
+- published database ports
+- exposed admin panels
+- exposed metrics endpoints
+- exposed debug endpoints
+- reverse-proxy misconfiguration
+- path rewrite mistakes
+- weak TLS configuration
+- internal services reachable from too many containers
+- flat Docker networks
+- unauthenticated Redis, Elasticsearch, PostgreSQL, or message queues
+- weak east-west traffic controls
+- internal DNS reconnaissance
+- metadata service access
+- host network mode
+- accidental exposure through `-p` or Compose `ports`
 
+### Storage, Volumes, and Host Filesystem Attack Surface
 
+Storage is where container isolation often becomes messy. Containers may use named volumes, bind mounts, temporary filesystems, uploaded files, logs, caches, and backup directories. Some of these are harmless. Others create direct paths between the container and the host.
 
+Storage attack vectors include:
+- writable bind mounts
+- host root mounted into a container
+- source code mounted into production containers
+- shared volumes reused across trust boundaries
+- database volumes accessible from non-database containers
+- secrets stored in mounted directories
+- backups mounted into application containers
+- writable upload directories
+- logs containing credentials
+- insecure file permissions on the host
+- volume deletion or tampering
 
+### Secrets and Configuration Attack Surface
 
+Secrets are often the easiest way for an attacker to move from one stage to the next. A container does not need to escape to the host if its environment already contains database credentials, cloud tokens, registry credentials, API keys, or deployment secrets.
 
+Secrets and configuration attack vectors include:
+- secrets in environment variables
+- secrets in `.env` files
+- secrets copied into image layers
+- secrets passed as build arguments
+- secrets printed in CI logs
+- secrets mounted into too many containers
+- long-lived tokens
+- broad cloud IAM permissions
+- registry credentials inside containers
+- TLS private keys in images or volumes
+- application config files with database passwords
+- debug logs containing tokens
+- trace data containing authorization headers
 
+### Runtime Exploits and Container Escape Attack Surface
 
+Container escape is the case where code running inside a container crosses into the host or another stronger security boundary. This can happen through runtime vulnerabilities, kernel vulnerabilities, dangerous configuration, excessive privileges, mounted sockets, or host filesystem exposure.
 
+MITRE ATT&CK describes Escape to Host as adversaries breaking out of a container or virtualized environment to gain access to the underlying host. MITRE also lists examples such as mounting the host filesystem, using privileged containers, abusing system calls, or exploiting a mounted container management socket such as `docker.sock`.
 
+Escape-related attack vectors include:
+- vulnerable host kernel
+- vulnerable container runtime
+- vulnerable runc or containerd components
+- privileged containers
+- host filesystem bind mounts
+- Docker socket access
+- host PID namespace
+- host network mode
+- dangerous Linux capabilities
+- disabled seccomp
+- weak AppArmor or SELinux confinement
+- writable `/proc` or `/sys`
+- device access from containers
 
+### Observability and Operations Attack Surface
 
+Monitoring, logging, tracing, and administration tools are defensive tools, but they can also become attack targets. Observability systems often have broad visibility across containers, hosts, logs, metrics, traces, and runtime metadata. Some agents run with elevated privileges. Some dashboards expose sensitive operational data. Some logs contain tokens, credentials, request headers, internal URLs, stack traces, or database connection strings.
+
+Attack vectors include:
+- exposed Grafana, Kibana, Prometheus, or logging dashboards
+- weak dashboard credentials
+- missing SSO or MFA
+- monitoring agents with host-level privileges
+- runtime sockets mounted into collectors
+- logs containing secrets
+- traces containing authorization headers
+- alerting webhooks with embedded tokens
+- over-permissive admin APIs
+- weak audit trails
+- attackers deleting logs or disabling monitoring
 
