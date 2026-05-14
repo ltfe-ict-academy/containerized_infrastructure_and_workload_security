@@ -10,10 +10,11 @@ A practical orientated course on containerized infrastructure and workload secur
  
 2. [**Container Threat Landscape**](./02_Container_Threat_Landscape/README.md)
     - **Introduction to Container Security: Myth vs. Reality**
-    - **Attack surface in containerized environments**
-    - **Container Images: Risks and Vulnerabilities**
-    - **Container registries and supply chain attacks**
-    - **Exploiting web apps, the poster child for cloud services**
+    - **Attack Surface In Containerized Environments**
+    - **The Image Problem: Risks and Vulnerabilities of Container Images**
+    - **Hands-On: Image Hardening**
+    - **Container Registries And Supply Chain Attacks**
+    - **Exploiting Web Apps, The Poster Child For Cloud Services**
 
 3. [**Container & Linux Networking**](./03_Container_and_Linux_Networking/README.md)
     - **Introduction to Linux Networking for Containers**
