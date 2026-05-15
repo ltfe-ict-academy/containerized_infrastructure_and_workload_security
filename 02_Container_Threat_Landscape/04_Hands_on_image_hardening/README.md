@@ -1,5 +1,29 @@
 # Hands-On Example Stack
 
+
+- Use: https://docs.docker.com/build/building/best-practices/#dockerfile-instructions
+- include the dockerfile best practices https://docs.docker.com/reference/dockerfile/#add
+- https://github.com/ltfe-ict-academy/cloud-docker-kubernetes/tree/main/Part_06_Building_Images#understand-how-cmd-and-entrypoint-interact
+- images that run as root by default, show USER in the Dockerfile
+- smaller base image
+- no `COPY . .`
+- narrow build context via `Dockerfile.hardened.dockerignore`
+- no `.env` in the build context
+- no unnecessary shell tools or editors
+- explicit non-root runtime user
+-  Minimize The Runtime Image
+
+### Step 4: Scan Both Images
+
+```bash
+trivy image --scanners vuln,secret,misconfig image-problem:insecure
+trivy image --scanners vuln,secret,misconfig image-problem:hardened
+```
+
+
+
+
+
 Part 02 keeps the exact same application from Part 01, but now we stop treating it as "just a working demo". We treat it like an artifact that could be attacked, scanned, abused, and misused in practice.
 
 This is the day where participants should start feeling uncomfortable with the Day 1 build.

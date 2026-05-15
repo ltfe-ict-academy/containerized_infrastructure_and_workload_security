@@ -409,6 +409,127 @@ Best practices for image referencing:
 - **CI/CD Pipelines**: Use automated scripts to resolve your tags to their underlying SHA256 digests before shipping.
 - **Production Environments**: Always deploy by digest. Never allow unpinned images or general environment tags like :latest in production environments, as they break your rollback capability and blindside container auditing.
 
+## Container Builders
+
+The build process is where an image transitions from a conceptual Dockerfile into a physical, runnable artifact. Historically, running `docker build` was a monolithic operation handled entirely by the Docker daemon. Today, modern container builds utilize a much more robust, efficient, and secure client-server architecture.
+
+### Modern Architecture: Buildx and BuildKit
+
+> As of Docker Engine 23.0 and Docker Desktop 4.19, Buildx is the default build client.
+
+When you execute a standard build command: 
+```bash
+sudo docker build -t course/backend:1.0 .
+```
+
+You are doing much more than just reading a Dockerfile. You are interacting with a decoupled system consisting of [two primary components](https://docs.docker.com/build/concepts/overview/):
+- **The Client (Buildx)**: Buildx is the user interface and CLI tool. It interprets your build options, gathers the necessary resources (build arguments, export options, context), and sends the build request.
+- **The Server (BuildKit)**: [BuildKit](https://docs.docker.com/build/buildkit/) is the backend daemon process that actually resolves the instructions and executes the build steps. BuildKit offers more advanced capabilities, including a rootless mode, the ability to produce an image for multiple platforms, the ability to push the image to multiple registries, and more.
+
+![Buildx and BuildKit Architecture](./images/img05.png)
+
+Unlike legacy builders that naively copied the entire local filesystem before starting a build, BuildKit only requests the specific resources it needs (local files, secrets, SSH sockets) from Buildx exactly when it needs them.
+
+> `docker build` is [effectively a wrapper](https://docs.docker.com/build/builders/#difference-between-docker-build-and-docker-buildx-build) for `docker buildx build`. However, using `docker buildx build` allows you to explicitly manage and target custom or remote BuildKit backends instead of defaulting to the bundled Docker Engine builder. Check the builder status with `sudo docker buildx ls`.
+
+The `docker build` and `docker buildx build` commands build Docker images from a **Dockerfile** and a **context**.
+
+### Attacks on the Build Machine
+
+The build machine should be treated as a critical security boundary. It is not only responsible for producing the final image, but it also executes the instructions from the Dockerfile during the build process. If an attacker can influence what gets built, or compromise the machine performing the build, the resulting image may become a delivery mechanism for malicious code.
+
+There are two main risks:
+
+- **Compromise of the build host**: A Dockerfile can execute arbitrary commands during build steps such as `RUN`. If the builder relies on a privileged Docker daemon, a successful attack may allow code running during the build to affect the host system or reach other internal services.
+- **Compromise of the build output**: If an attacker can modify the Dockerfile, the build context, dependencies, or trigger unexpected builds, they may be able to insert a backdoor into the image that is later deployed to production.
+
+Because build machines produce the software that eventually runs in production, they should be hardened with similar care as production systems themselves. Ideally, builds should run on separate infrastructure from production workloads. This limits the blast radius if a build process is compromised.
+
+A stronger approach is to use **short-lived build environments**, where a fresh virtual machine or isolated builder is created for each build and destroyed afterwards. This makes it much harder for malicious files, credentials, or modified state to persist between builds.
+
+To reduce risk:
+
+- Prefer **rootless or unprivileged builders** where possible.
+- Avoid running builds on machines with broad access to production networks or cloud services.
+- Limit the credentials available during the build.
+- Restrict direct user access to build machines.
+- Use firewalls, VPC rules, and network policies to limit where build machines can connect.
+- Remove unnecessary tools and services from build environments.
+
+Even if the final container image is carefully secured, the build environment must not be ignored. A compromised build machine can silently produce compromised images.
+
+### Alternative Builders and Non-Privileged Builds
+
+To mitigate the security risks of privileged build environments, the industry has shifted toward non-privileged and rootless build architectures. For production and CI/CD environments, consider these alternatives:
+
+| Alternative Builder | Description |
+| ------------ | ----------- | 
+| **Rootless Docker** | Runs the Docker daemon (`dockerd`) as a non-root user. This is generally available but requires manual opt-in. |
+| **BuildKit Container Driver** | Allows running builds seamlessly within an isolated container, separating the build execution from the host operating system. |
+| **Podman & Buildah** | Red Hat's daemonless alternatives. `buildah` is specifically engineered for building OCI images without requiring a background daemon or root privileges. |
+| **Bazel & Nix** | Advanced build systems that focus on highly deterministic, reproducible builds, guaranteeing that the exact same source code will always produce the exact same cryptographic image hash. |
+| **ko & jib** | Language-specific tools (`ko` for Go, `jib` for Java) that compile code and assemble container images directly, without needing Docker installed at all. |
+
+> [Example](https://docs.gitlab.com/ci/docker/using_buildkit/#build-images-in-rootless-mode) from Gitlab on how to use BuildKit in a rootless mode.
+
+Whether executed locally or automated in a pipeline, treating the build execution environment as a heavily scrutinized security boundary is just as important as securing the final container itself.
+
+## Dockerfile: Build Instructions
+
+Docker builds images by reading the instructions from a Dockerfile. A Dockerfile is a text file containing instructions for building your source code. The Dockerfile instruction syntax is defined by the specification reference in the [Dockerfile reference](https://docs.docker.com/reference/dockerfile/).
+
+Dockerfiles are crucial inputs for image builds and can facilitate automated, multi-layer image builds based on your unique configurations. Dockerfiles can start simple and grow with your needs to support more complex scenarios.
+
+The default filename to use for a Dockerfile is `Dockerfile`, without a file extension. Using the default name allows you to run the `docker build` command without having to specify additional command flags.
+
+Some projects may need distinct Dockerfiles for specific purposes. A common convention is to name these `<something>.Dockerfile`. You can specify the Dockerfile filename using the `--file` flag for the docker `build command`.
+
+
+
+
+
+
+
+
+
+
+
+## The Build Context: A Hidden Security Boundary
+
+[The build context](https://docs.docker.com/build/concepts/context/) is the set of files that your build can access. The positional argument that you pass to the build command specifies the context that you want to use for the build.
+
+Most teams diligently review their Dockerfiles. Far fewer teams review their build context. This is a critical security oversight. When you run `docker build .`, the `.` does not mean "only build the files explicitly mentioned in the Dockerfile." It dictates that the builder has access to a build context rooted at the current directory, including all subdirectories.
+
+If you are not careful, highly sensitive files can be shipped to the builder or accidentally leaked into the image layers via blanket `COPY . .` commands. Dangerous context contents include:
+- `.env` files with active credentials
+- `.git/` directories containing full commit histories
+- `id_rsa` or `*.pem` keys
+- `npm` tokens or `pip.conf` files
+- Test databases, debug logs, or customer samples
+
+
+## Defending the Context with `.dockerignore`
+
+You can use a `.dockerignore` file to exclude files or directories from the build context. This helps avoid sending unwanted files and directories to the builder, improving build speed, especially when using a remote builder.
+
+When you run a build command, the build client looks for a file named `.dockerignore` in the root directory of the context. If this file exists, the files and directories that match patterns in the files are removed from the build context before it's sent to the builder.
+
+Use a `.dockerignore` file aggressively to filter what the builder is allowed to see. While you can try to maintain a blacklist of specific sensitive files, an allow-list approach is far stricter and more secure:
+```plaintext
+# .dockerignore
+
+# 1. Start by ignoring absolutely everything
+**
+
+# 2. Explicitly allow only what the build needs
+!app.py
+!requirements.txt
+!Dockerfile
+```
+
+This pattern ensures that if a developer accidentally drops a new secret file into the directory, it will be automatically blocked from the build context by default.
+
+
 ## Selecting Base Images
 
 The base image is the foundation of the final image. If the base is stale, bloated, untrusted, unsupported, or malicious, everything built on top inherits that problem.
@@ -603,328 +724,65 @@ If we inspect both resulting production images using tools like docker image ls 
 - The `distroless` image provides a small foundational layer that sets up standard Unix paths like `/etc`, `/var`, and `/tmp`, maps a default non-privileged user profile, and keeps system root certificates updated automatically through upstreams like Debian.
 
 While FROM scratch offers the absolute theoretical minimum attack surface, **"distroless" is generally the superior choice for enterprise production binaries**:
-1. **Security by Default (Non-Root Execution)**_ Running a container as the root user is a critical vulnerability. In a scratch container, configuring a custom non-root user requires manually generating and copying `/etc/passwd` files into the image. Distroless images ship with a secure nobody user built-in, making risk mitigation as simple as adding `USER 65534:65534` to your Dockerfile.
+1. **Security by Default (Non-Root Execution)**: Running a container as the root user is a critical vulnerability. In a scratch container, configuring a custom non-root user requires manually generating and copying `/etc/passwd` files into the image. Distroless images ship with a secure nobody user built-in, making risk mitigation as simple as adding `USER 65534:65534` to your Dockerfile.
 2. **Maintenance and Compliance**: Production applications constantly interact with the outside world via TLS/SSL. If you choose scratch, you are responsible for manually updating root certificates every time an automated image build triggers. Distroless base images handle this up-stream; simply pulling the latest base patch automatically patches underlying certificate authorities and critical system libraries.
 3. **Dynamic Linking Compatibility**: Many compiled binaries still rely on standard system bindings (like `glibc` for network lookups or cryptographic tasks). Compiling with `CGO_ENABLED=0` works perfectly for pure Go or Rust, but if your code pulls in a legacy C library, a scratch container will immediately crash with a misleading file not found error. Distroless provides specific variants (like `distroless/base`) that include `glibc`, giving you the safety of a shell-less image without sacrificing system library access.
 
 > Use scratch only when you are deploying an entirely autonomous utility that requires no OS primitives, no network certificates, and no external library bindings. For everything else, default to distroless to ensure standard operational compliance, user isolation, and maintainability.
 
-## Docker Build
+## Rebuild your images often
 
-Modern Docker Build uses Buildx as the client and BuildKit as the builder backend. Docker’s documentation describes Docker Build as a client-server architecture: Buildx is the user interface for running and managing builds, while BuildKit executes the build steps. When you run docker build, you are using Buildx to send a build request to BuildKit.
+Docker's build cache drastically speeds up build times by reusing existing layers when an instruction hasn't changed. However, security teams must recognize that the cache can preserve stale, vulnerable assumptions.
+
+Docker checks each Dockerfile instruction against cached layers based on the literal command string. For example, if you have `RUN apt-get -y update`, Docker matches the string text. The files residing on the remote package server are not examined to determine if the cache should be invalidated. Therefore, a successful rebuild does not guarantee that your OS packages were actually refreshed.
+
+Practical guidance for cache security:
+- Use `docker build --pull -t course/backend:1.0 .` in CI pipelines to force Docker to check the registry for newer versions of your base image.
+- Use `docker build --no-cache -t course/backend:1.0 .` when patch freshness is absolutely critical.
+- Use `docker builder prune` to periodically clear out stale local caches.
+
+Implement scheduled CI rebuilds, rather than relying solely on application-code-triggered builds, to ensure upstream security patches are pulled in.
+
+https://docs.docker.com/build/building/best-practices/#rebuild-your-images-often
+
+<!-- ### 10. Rebuild Images Continuously
+
+One of the most common image failures is simple neglect.
+
+Teams often rebuild only when app code changes. That means:
+
+- base image fixes are missed
+- distro package fixes are missed
+- scanner results become stale
+
+Mature pattern:
+
+- scheduled rebuilds even when app code is unchanged
+- automatic pull requests or tickets when base image digests drift
+- policy around maximum image age -->
 
 
 
+## Multi-stage builds
+- https://docs.docker.com/build/building/multi-stage/
 
+## Using build variables
+- https://docs.docker.com/build/building/variables/
+
+> We will show how to use build secret variables in the Part 4 of the course.
+
+## Building Multiplatform Images
+- https://docs.docker.com/build/building/multi-platform/
 ---
 
-
-
-
-
-- docker build, buildx, and BuildKit are the main tools for building images
-- https://docs.docker.com/build/concepts/overview/
-
-<!-- 
-### 4. Treat Build Context As A Security Boundary
-
-Most teams focus on the Dockerfile and ignore the context. That is a mistake.
-
-The command:
-
-```bash
-docker build .
-```
-
-sends a build context. If the context is messy, the image build is already risky before the first instruction runs.
-
-Common unwanted context content:
-
-- `.env` files
-- `.git` history
-- editor backups
-- local test data
-- internal notes
-- SSH keys
-- package-manager credentials
-- old backups and exports
-
-The hardened demo uses a Dockerfile-specific ignore file that allow-lists only what the build actually needs. That is stronger than trying to maintain a long deny-list. -->
-
-
-## Dockerfiles and Build Best Practices
-- docker file is a build script, not a recipe for a final image
-- include the dockerfile best practices https://docs.docker.com/reference/dockerfile/#add
-- https://github.com/ltfe-ict-academy/cloud-docker-kubernetes/tree/main/Part_06_Building_Images
-
-
-possible problems do mantion
-using untrusted public base images
-using large full-OS images when a smaller image would be enough
-stale packages and vulnerable libraries
-unnecessary shells, package managers, compilers, curl, wget, or debugging tools
-SSH servers inside production containers
-images that run as root by default
-secrets copied into image layers
-sensitive files included through a broad build context
-missing or weak .dockerignore
-unverified downloads in the Dockerfile
-curl | sh installation patterns
-mutable tags such as latest
-missing image signing or provenance
-vulnerable application dependencies baked into the image
-
-<!-- ### 2. Pin What You Mean
-
-At minimum:
-
-- pin a meaningful version tag
-
-For production:
-
-- pin the digest
-
-Example:
-
-```dockerfile
-FROM python:3.12-slim-bookworm@sha256:<current-digest>
-```
-
-Useful commands:
-
-```bash
-docker buildx imagetools inspect python:3.12-slim-bookworm
-docker pull python@sha256:<digest>
-```
-
-Practical guidance:
-
-- developers can work with versioned tags during iteration
-- CI should resolve and record exact digests
-- deployments should reference digests for exact rollout and rollback -->
-
-
-
-
-<!-- ### Demo 2: Leak A Secret Into An Image Layer
-
-Now we prove a common failure mode that appears constantly in real environments.
-
-The insecure Dockerfile copies the whole build context, including `.env`, and then deletes `.env` in a later layer:
-
-```dockerfile
-COPY . .
-RUN rm -f .env
-```
-
-That looks harmless to many developers. It is not.
-
-### Step 1: Search The Exported Layers For The Training Secret
-
-Linux or macOS:
-
-```bash
-grep -R "training-only-password" extracted-image
-```
-
-PowerShell:
-
-```powershell
-Get-ChildItem -Recurse extracted-image | Select-String "training-only-password"
-```
-
-Expected outcome:
-
-- you should find the secret value in one of the extracted layer files even though `.env` was deleted later
-
-### Why This Happens
-
-The final container filesystem is a merged view of multiple layers.
-
-Deleting a file in a later layer usually means:
-
-- the later layer contains a removal marker
-- the earlier layer still exists
-- the artifact still contains the bytes you should never have shipped
-
-### Why This Is Operationally Dangerous
-
-If a bad image was:
-
-- pushed to a registry
-- cached in CI
-- pulled by another developer
-- used in a staging environment
-- mirrored to another registry
-
-then deleting the file in source control after the fact does not clean up the already-built artifact.
-
-The remediation is usually:
-
-1. rotate the secret
-2. rebuild the image from a clean state
-3. replace the bad image everywhere it was distributed
-4. clean up registry and CI artifacts where possible
-
-### A Subtle But Important Point
-
-If `trivy` does not flag the training values in this demo as a secret, that is not a failure of the lecture. It is a useful lesson.
-
-Secret scanning is extremely valuable, but it is pattern-based and heuristic-driven. Generic test values may not match a built-in rule. That does not make the image safe. -->
-
-<!-- ## Demo 3: Rebuild The Same App With A Hardened Image Approach
-
-Now we build the same backend again, but we make different choices:
-
-- smaller base image
-- no `COPY . .`
-- narrow build context via `Dockerfile.hardened.dockerignore`
-- no `.env` in the build context
-- no unnecessary shell tools or editors
-- explicit non-root runtime user
-
-### Step 1: Build The Hardened Image
-
-```bash
-docker build -f Dockerfile.hardened -t image-problem:hardened .
-```
-
-### Step 2: Compare The Two Images
-
-```bash
-docker image ls image-problem
-docker image history --no-trunc image-problem:hardened
-docker image history --no-trunc image-problem:insecure
-```
-
-What to notice:
-
-- the hardened image should be smaller
-- the hardened image copies only the application file
-- the hardened image does not embed the demo `.env`
-- the runtime user is no longer root
-- the layer history is simpler and easier to reason about
-
-### Step 3: Run The Hardened Image
-
-```bash
-docker run --rm -p 8080:8080 image-problem:hardened
-```
-
-In another terminal:
-
-```bash
-curl http://localhost:8080/
-```
-
-The response includes the runtime user ID so you can confirm the image is not running as root.
-
-### Step 4: Scan Both Images
-
-```bash
-trivy image --scanners vuln,secret,misconfig image-problem:insecure
-trivy image --scanners vuln,secret,misconfig image-problem:hardened
-```
-
-What to look for:
-
-- package count differences
-- severity distribution differences
-- whether unnecessary files or metadata show up
-- whether the hardened image is easier to triage
-
-Do not oversell the result. Smaller and cleaner is better, but "fewer findings" is not the same thing as "secure".
-
-## Optional Demo Extension: Safe Build-Time Secret Consumption
-
-If a build must temporarily use a secret, do not use `ARG`, `ENV`, or `COPY`.
-
-Use BuildKit secrets instead.
-
-Create a local file that is not committed to source control:
-
-Linux or macOS:
-
-```bash
-printf "training-only-token\n" > private-token.txt
-```
-
-PowerShell:
-
-```powershell
-Set-Content -Path private-token.txt -Value "training-only-token"
-```
-
-Build the optional example:
-
-```bash
-docker build -f Dockerfile.build-secrets \
-  --secret id=demo_token,src=private-token.txt \
-  -t image-problem:build-secret .
-```
-
-What this demonstrates:
-
-- the secret is mounted only for the relevant `RUN` step
-- it is not copied into the final image filesystem
-- it avoids the very common anti-pattern of using build args for credentials
-
-Delete the local secret file after the demo:
-
-Linux or macOS:
-
-```bash
-rm private-token.txt
-```
-
-PowerShell:
-
-```powershell
-Remove-Item private-token.txt
-``` -->
-
-
-<!-- ### 5. Never Pass Secrets Through `ARG`, `ENV`, Or `COPY`
-
-This is one of the most important applied rules in the lecture.
-
-Bad patterns:
-
-- `ARG NPM_TOKEN=...`
-- `ENV AWS_SECRET_ACCESS_KEY=...`
-- `COPY .npmrc /root/.npmrc`
-- `COPY .env /app/.env`
-
-Better pattern:
-
-- `RUN --mount=type=secret,...`
-
-Even build arguments are unsafe for secrets. Depending on how they are used, they may be visible in image history and in provenance data generated by modern build systems. -->
-
-
-<!-- 
-### 3. Minimize The Runtime Image
-
-Smaller is not automatically secure, but smaller usually means:
-
-- fewer packages to patch
-- fewer libraries to scan
-- fewer tools for an attacker after compromise
-- less noise during triage
-
-Reasonable approaches:
-
-- slim base images
-- distroless or hardened runtime images where they fit operations
-- multi-stage builds so toolchains stay in builder stages
-
-Tradeoff to teach explicitly:
-
-- the more minimal the image, the harder interactive debugging may become
-- mature teams often keep a separate debug image or debug workflow instead of bloating the production image
- -->
-
-
+## General best practices for images
+
+- **Decouple applications**: Each container should have only one concern. Decoupling applications into multiple containers makes it easier to scale horizontally and reuse containers.
+- **Create ephemeral containers**: The image defined by your Dockerfile should generate containers that are as ephemeral as possible. Ephemeral means that the container can be stopped and destroyed, then rebuilt and replaced with an absolute minimum set up and configuration.
+- **Don't install unnecessary packages**: Avoid installing extra or unnecessary packages just because they might be nice to have. For example, you don’t need to include a text editor in a database image. When you avoid installing extra or unnecessary packages, your images have reduced complexity, reduced dependencies, reduced file sizes, and reduced build times.
+- **Sort multi-line arguments**: Whenever possible, sort multi-line arguments alphanumerically to make maintenance easier. This helps to avoid duplication of packages and make the list much easier to update. This also makes PRs a lot easier to read and review. Adding a space before a backslash (`\`) helps as well.
+- **Leverage build cache**: When building an image, Docker steps through the instructions in your Dockerfile, executing each in the order specified. For each instruction, Docker checks whether it can reuse the instruction from the build cache. As soon as the cache is broken, Docker executes all the instructions that follow, even if they haven’t changed.
+- **Pin base image versions**: To fully secure your supply chain integrity, you can pin the image version to a specific digest. By pinning your images to a digest, you're guaranteed to always use the same image version, even if a publisher replaces the tag with a new image.
 
 ## Generating SBOMs
 
@@ -1011,49 +869,13 @@ In other words:
 
 
 
-## General best practices for images
+
 
 
 <!-- 
-### 10. Rebuild Images Continuously
-
-One of the most common image failures is simple neglect.
-
-Teams often rebuild only when app code changes. That means:
-
-- base image fixes are missed
-- distro package fixes are missed
-- scanner results become stale
-
-Mature pattern:
-
-- scheduled rebuilds even when app code is unchanged
-- automatic pull requests or tickets when base image digests drift
-- policy around maximum image age
 
 
-### 9. Sign Images And Verify Them Before Deployment
 
-Signing proves publisher control over an artifact reference. Verification lets the platform reject artifacts that do not meet policy.
-
-Example with `cosign`:
-
-```bash
-cosign sign registry.example.com/course/backend@sha256:<digest>
-cosign verify registry.example.com/course/backend@sha256:<digest>
-```
-
-Practical guidance:
-
-- sign the immutable digest, not just a tag
-- verification should happen automatically in CI, admission control, or deploy pipelines
-- signatures complement scanning and provenance; they do not replace them
-
-Current ecosystem note:
-
-- do not design new workflows around legacy Docker Content Trust assumptions
-- modern image signing programs should center on Sigstore or Notation-style verification workflows -->
-<!-- 
 ## Minimum 2026 CI/CD Gate For Images
 
 For a professional baseline, a pipeline for containerized workloads should do at least this:
