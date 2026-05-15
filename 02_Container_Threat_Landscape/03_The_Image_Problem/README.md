@@ -23,6 +23,23 @@ Images are constructed using a stacked layer system. Each instruction in a build
 
 While Docker popularized the format, the industry now follows the **Open Container Initiative (OCI) standard**. This ensures portability across the ecosystem. You can build an image using Docker, but run it using Podman, containerd, or CRI-O without any modifications. If a tool is OCI-compliant, it will handle the image flawlessly.
 
+## Why The Image Is The Problem
+
+When a team says, “We run containers,” what they often mean in practice is: **We run whatever was baked into an image at build time.**
+
+That image may contain:
+- an outdated operating system snapshot
+- vulnerable OS packages
+- vulnerable language dependencies
+- unnecessary shells, package managers, compilers, and debugging tools
+- credentials or internal files accidentally copied from the build context
+- a default runtime user of root
+- broad metadata, labels, environment variables, and build history
+- an old base image that has not been rebuilt since new CVEs were published
+- no SBOM, no signature, no provenance, and no clear ownership
+
+**If the image runs, that does not mean the image is fine.** Images have memory. Build steps, layers, metadata, copied files, and package manager artifacts can preserve information long after the final container appears to work correctly.
+
 ## OCI Container Standards
 
 The [Open Container Initiative (OCI)](https://opencontainers.org/) is a lightweight, open governance structure (project), formed under the auspices of the Linux Foundation, for the express purpose of creating open industry standards around container formats and runtimes. The OCI was launched on June 22nd 2015 by Docker, CoreOS and other leaders in the container industry. The OCI currently contains three specifications: 
@@ -183,137 +200,223 @@ cat python-bundle/config.json
 
 > In Docker we can inspect the image configuration with `sudo docker pull python:3.14-slim-bookworm && sudo docker image inspect python:3.14-slim-bookworm`. 
 
+## Image Layers
 
----
-https://chatgpt.com/g/g-p-6a05bbc989148191b3eace3ab72144bf-pesco-container-security/c/6a05c1c3-758c-8326-a312-ea39905455c6?tab=sources
+Layers are one of the most critical concepts in container architecture, particularly for optimization and security.
 
-### Why Layers Matter
+An image filesystem is built by stacking these layers on top of each other. Each layer represents a precise set of changes relative to its parent layer: files added, files modified, or files removed. The OCI configuration specification describes an image as an ordered collection of these filesystem changesets combined with execution parameters (like entrypoints, environment variables, and labels).
 
-Layers are the reason image mistakes persist.
+A simplified conceptual view of an image looks like this:
 
-If you:
+```
+Layer 5: Set user and command  (Metadata only)
+Layer 4: Install dependencies  (Filesystem changes)
+Layer 3: Copy application      (Filesystem changes)
+Layer 2: Install Python        (Filesystem changes)
+Layer 1: Base OS files         (Base layer)
+```
 
-1. `COPY .env /app/.env`
-2. `RUN rm /app/.env`
+![Image Layers](./images/img02.png)
 
-the file disappears from the final merged filesystem view, but it was still present in an earlier layer. OCI layers represent additions, modifications, and removals as changesets. Removals are represented through whiteouts, not by rewriting earlier layers out of existence.
+Source: Docker Deep Dive, Nigel Poulton
 
-Security consequence:
+At runtime, the container runtime merges these separate layer archives into a single, unified filesystem view. To the application running inside the container, it feels like a standard, flat directory structure, even though it is backed by loosely-connected, read-only layers. Because layers are independent, **multiple images can and often do share the same base layers, leading to massive space efficiencies across your system**.
 
-- "I deleted it later" is not a valid remediation if the image was already built
-- anyone with access to the image layers or a saved tarball may still recover the deleted content
-- registries, caches, CI artifacts, and other developers may already have the bad image
+### Inspecting Image Layers
 
+There are three primary ways to inspect the layers that make up an image:
 
+1. **During an Image Pull**: When you download an image, you can watch the layers pull in real time. Each line ending in "Pull complete" is a distinct layer being downloaded and extracted.
+   ```bash
+   sudo docker image pull redis:latest
+   ```
 
+2. **Using `docker image inspect`**: This command provides low-level cryptographic details about the image, including the specific content hashes (DiffIDs) of the filesystem layers.
+   ```bash
+   sudo docker image inspect redis:latest
+   ```
 
-## Why The Image Is The Problem
+3. **Using `docker history`**: This command displays the build history of the image. Note that it is not a strict list of filesystem layers; some Dockerfile instructions (like `ENV`, `EXPOSE`, or `CMD`) only add configuration metadata and do not result in a physical layer.
+   ```bash
+   sudo docker image history redis:latest
+   ```
 
-- we do demos for each of the problems
+### Images vs. Containers: The Writable Layer
 
-When teams say "we run containers", what they often mean in practice is "we run whatever was baked into an image at build time". That image may contain:
+The fundamental difference between a container and an image is a **single thin layer added to the very top of the stack: [the writable container layer](https://docs.docker.com/engine/storage/drivers/)**.
 
-- an outdated operating system snapshot
-- vulnerable OS packages
-- vulnerable application dependencies
-- build tools that are no longer needed at runtime
-- credentials, tokens, SSH keys, or internal files accidentally copied into the build context
-- misleading metadata such as a mutable tag that no longer points to the image the team thinks it does
-- no trustworthy proof of where the image came from or how it was built
+![Container Layer](./images/img03.jpg)
 
-An image is not just a zip file with an application inside it. It is a layered supply-chain artifact with identity, history, and metadata.
+Source: https://docs.docker.com/storage/storagedriver/
 
-If you only look at `docker run myapp:latest`, you see almost none of that risk.
+While **all underlying image layers are strictly read-only**, the container layer enables all read/write operations for a active instance.
+- **Short-lived Nature**: This writable layer lives on the Docker host's filesystem (typically under `/var/lib/docker/<storage-driver>/...`). It is tightly bound to the lifecycle of the container. If the container is deleted, its writable layer is permanently destroyed, while the underlying image remains completely unchanged.
+- **Multi-Tenancy**: Because each container maintains its own separate writable layer, multiple running containers can simultaneously share access to the exact same underlying image while maintaining their own unique data states.
 
+![Multi-Tenancy](./images/img04.webp)
 
+Source: https://docs.docker.com/storage/storagedriver/
 
+If an application inside a container needs to modify an existing file that belongs to a read-only image layer, [Docker uses a **copy-on-write strategy**](https://docs.docker.com/engine/storage/drivers/#the-copy-on-write-cow-strategy):
+1. The filesystem detects the write request on a lower layer file.
+2. It instantly copies that file up into the container's thin writable layer.
+3. The container modifies the copy in the writable layer, seamlessly hiding the original file beneath it.
+
+This layer management is handled by [Linux storage drivers](https://docs.docker.com/engine/storage/drivers/select-storage-driver/) (such as `overlay2`, `fuse-overlayfs`, `btrfs`, or `zfs`). While storage drivers are highly space-efficient, copy-on-write operations **introduce performance overhead for write-intensive applications (like databases)**.
+
+> Never use the container's writable layer for heavy I/O or persistent data. Always use Docker Volumes for write-intensive applications to bypass the storage driver and achieve native performance.
+
+### Why "Deleted" Files Still Matter
+
+A common security mistake occurs when developers treat a Dockerfile like a standard shell script. Consider this example:
+```bash
+mkdir image-layer-demo
+cd image-layer-demo
+
+# Create a fake .env file with a secret value
+cat > .env <<'EOF'
+DATABASE_PASSWORD=training-only-password
+EOF
+
+# Create an intentionally bad Dockerfile:
+cat > Dockerfile <<'EOF'
+FROM alpine:3.23
+WORKDIR /app
+COPY . .
+RUN rm -f .env
+CMD ["sh", "-c", "ls -la /app && sleep 3600"]
+EOF
+
+# Build the image
+sudo docker build -t image-problem:layer-leak .
+
+# Run the image and notice that .env is not visible:
+sudo docker run --rm image-problem:layer-leak
+```
+
+It is a common misconception that `/app/.env` is safely erased because it does not appear in the final running container. It is not safe.
+
+Because OCI layers are immutable changesets, a file removal does not delete the data from previous layers. Instead, the `rm` command creates a whiteout marker - an empty file with a `.wh.` prefix signifying that the path should be hidden from that point forward.
+
+Now export the image and search the artifact:
+```bash
+sudo docker image save -o layer-leak.tar image-problem:layer-leak
+mkdir extracted
+sudo tar -xf layer-leak.tar -C extracted
+
+# Create a directory to hold the actual recovered files
+mkdir recovered_contents
+
+# Find all compressed layer blobs and extract them into that directory
+find extracted/blobs/sha256/ -type f -exec tar -xzf {} -C recovered_contents 2>/dev/null \;
+
+# View your successfully stolen secret
+cat recovered_contents/app/.env
+
+# Confirm the file is still there even though it was "deleted" in the Dockerfile
+ls -la recovered_contents/app/
+# total 16
+# drwxr-xr-x  2 administrator administrator 4096 May 15 09:35 .
+# drwxrwxr-x 20 administrator administrator 4096 May 15 09:45 ..
+# -rw-rw-r--  1 administrator administrator  100 May 15 09:35 Dockerfile
+# -rw-rw-r--  1 administrator administrator   41 May 15 09:34 .env
+# ----------  1 administrator administrator    0 Jan  1  1970 .wh..env
+```
+
+The sensitive file is hidden from the final merged filesystem view, but the raw bytes still exist entirely intact within the tarball of Layer 1. Anyone with access to the image archive, the container registry, or the CI/CD cache can easily extract the lower layer and recover the secret.
+- "I deleted it later" is not a valid remediation for a leaked secret.
+- If an image containing a secret was pushed to a registry, assume that secret has been compromised.
+- Remediation: Rotate the secret immediately, use multi-stage builds to avoid copying secrets into intermediate layers, and rebuild your images from a clean state.
 
 ## Image naming and tagging
-- Pin image versions carefully. -> shows tags difference, tags can change, hashes vs tags, how to get the digest, how to use it in a Dockerfile.
-- Prefer immutable digests for critical workloads.
 
-### Tags vs Digests
-
-This is one of the most important practical distinctions in the entire course.
-
-`backend:latest` does not identify one exact artifact. It identifies whatever artifact the registry currently maps to that tag.
-
-`backend@sha256:...` identifies one exact artifact.
-
-Security consequence:
-
-- tags are good for human workflow
-- digests are required for exact reproduction, precise rollback, and trustworthy deployment references
-
-In 2026, a mature pipeline should treat digest-based identity as normal, not advanced.
-
-
-## Inspecting Images
-
-
-
-<!-- ### Step 1: Move Into The Demo Folder
-
-```bash
-cd demo
+Image names look simple on the surface, but the way you reference them hides critical trust and security decisions. A fully qualified image reference follows this structure:
+```
+[registry]/[namespace]/[repository]:[tag]@[digest]
 ```
 
-### Step 2: Create A Local `.env` From The Example File
+Examples:
+- `nginx:1.27` (Implies Docker Hub registry and library namespace)
+- `docker.io/library/nginx:1.27` (Explicit version of the same image)
+- `registry.example.com/course/backend:1.0.0` (Private registry reference)
+- `registry.example.com/course/backend@sha256` (Referenced strictly by digest)
+- `registry.example.com/course/backend:1.0.0@sha256` (Referenced by both tag and digest)
 
-Linux or macOS:
+The most critical distinction when managing container lifecycles is understanding that tags represent names, while digests represent identity.
 
-```bash
-cp .env.example .env
+
+| Feature   | Image Tag (:1.0.0)  | Image Digest (@sha256:...)   |
+| ----------- | ----------- | --------- |
+| **What it is** | A human-readable pointer or alias. | A unique, cryptographic SHA256 hash of the content. |
+| **Mutability** | Mutable: Can be moved to point to a completely different image artifact. | Immutable: Uniquely ties to one specific layout of layers and config. It can never change. |
+| **Analogy** | Like a Git branch name (e.g., main or dev) which moves as new commits are added. | Like a specific Git commit hash. It points to a precise moment in time. |
+
+When you pull `backend:latest`, you are not identifying an exact artifact. You are pulling whatever image the registry currently maps to that tag. If someone pushes a new build to that tag five minutes later, the "latest" image changes.
+
+When you **pull an image by its digest**, you guarantee that you are fetching the exact same bits every single time. Even if a developer overwrites a tag on the registry, the digest remains a permanent reference to that specific artifact.
+
+
+Imagine you are running a production stack using a Docker Compose file distributed across three different backend servers:
+
+```yaml
+services:
+  web:
+    image: registry.example.com/course/backend:1.0.0
+    ports:
+      - "8080:8080"
 ```
 
-PowerShell:
+If a developer accidentally overwrites the `1.0.0` tag in the registry with a buggy build, look at what happens over time:
+   - Server A already has the old `1.0.0` cached locally and keeps running the stable code.
+   - Server B crashes, restarts, pulls `1.0.0` fresh from the registry, and gets the buggy code.
+   - Server C is a brand new server added to handle traffic logs, pulls `1.0.0`, and gets the buggy code.
 
-```powershell
-Copy-Item .env.example .env
+Even though all three servers look identical in your Docker Compose file, they are now running completely different software configurations.
+
+By **pinning your production environments to a digest, you eliminate tag drift**. If a tag changes on the registry, Docker will ignore the tag change and pull exactly what the cryptographic hash dictates. Also the risk for supply chain attacks is reduced, because if an attacker compromises the registry and pushes a malicious image to a commonly used tag, your production environment will not be affected if it is pinned to a digest.
+
+```yaml
+services:
+  web:
+    # Human-readable tag + strict digest validation
+    image: registry.example.com/course/backend:1.0.0@sha256:45b23dee08af5e43...
+    ports:
+      - "8080:8080"
 ```
 
-### Step 3: Build The Insecure Image
+> When both a tag and a digest are provided, Docker prioritizes the digest for the pull operation.
 
-```bash
-docker build -f Dockerfile.insecure -t image-problem:insecure .
-```
+### Practical Commands
 
-### Step 4: Inspect Basic Metadata
+1. **View the Immutable Repo Digest Locally**: After pulling a standard tagged image, you can find its cryptographic identity using docker image inspect:
+   ```bash
+   sudo docker pull alpine:3.23
+   sudo docker image inspect alpine:3.23 --format '{{json .RepoDigests}}'
+   ```
 
-```bash
-docker image inspect image-problem:insecure
-docker image history --no-trunc image-problem:insecure
-docker image ls image-problem:insecure
-```
+2. **Inspect Multi-Platform Image Indexes**: Many modern images contain sub-manifests for different architectures (like amd64 and arm64). You can inspect the root index digest using:
+   ```bash
+   sudo docker buildx imagetools inspect alpine:3.23
+   ```
 
-What to notice:
+3. **Hardcoding Digests into Your Workflows**: To secure your builds, use digests right inside your Dockerfile:
+   ```dockerfile
+   FROM alpine:3.23@sha256:48d9183eb12a0535fbc24a101ee981f92e0df400810db69ef2dbf1e31d3f972b
+   ```
 
-- the image was built as `root`
-- it contains more than just the application
-- the history shows a full command trail for each layer
-- the total size is larger than it needs to be for a trivial Python service  -->
+Best practices for image referencing:
+- **Local Development**: Version tags (like :3.12-slim) are perfectly acceptable for speed and convenience.
+- **CI/CD Pipelines**: Use automated scripts to resolve your tags to their underlying SHA256 digests before shipping.
+- **Production Environments**: Always deploy by digest. Never allow unpinned images or general environment tags like :latest in production environments, as they break your rollback capability and blindside container auditing.
 
-<!-- ### Step 5: Export The Image And Look At The Artifact
 
-```bash
-docker image save -o insecure-image.tar image-problem:insecure
-mkdir extracted-image
-tar -xf insecure-image.tar -C extracted-image
-```
 
-Now inspect the extracted image contents:
 
-```bash
-ls extracted-image
-cat extracted-image/manifest.json
-```
 
-If you want to dig deeper, unpack the layer tar files and inspect them. The exact file names differ per build because they are content-addressed.
 
-Key lesson:
 
-- an image is a structured artifact with manifests, config, and layers
-- you should be willing to inspect it the same way you would inspect a package, VM image, or signed binary -->
+---
+
 
 ## Selecting Base Images
 - Use trusted base images. -> show how easy is to get a bad image, docker official images, hardened images, curated internal images.
