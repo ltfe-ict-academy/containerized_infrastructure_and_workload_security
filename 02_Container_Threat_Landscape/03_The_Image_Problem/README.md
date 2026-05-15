@@ -409,8 +409,209 @@ Best practices for image referencing:
 - **CI/CD Pipelines**: Use automated scripts to resolve your tags to their underlying SHA256 digests before shipping.
 - **Production Environments**: Always deploy by digest. Never allow unpinned images or general environment tags like :latest in production environments, as they break your rollback capability and blindside container auditing.
 
+## Selecting Base Images
+
+The base image is the foundation of the final image. If the base is stale, bloated, untrusted, unsupported, or malicious, everything built on top inherits that problem.
+
+[Docker’s build best-practices documentation](https://docs.docker.com/build/building/best-practices/#choose-the-right-base-image) puts base image selection first: **choose an image from a trusted source and keep it small**. 
+- **Docker Official Images** are a curated collection that have clear documentation, promote best practices, and are regularly updated. They provide a trusted starting point for many applications.
+- **Verified Publisher images** are high-quality images published and maintained by the organizations partnering with Docker, with Docker verifying the authenticity of the content in their repositories.
+- **Docker-Sponsored Open Source** images are published and maintained by open source projects sponsored by Docker through an open source program.
+
+When building your own image from a Dockerfile, ensure you choose a minimal base image that matches your requirements. **A smaller base image not only offers portability and fast downloads, but also shrinks the size of your image and minimizes the number of vulnerabilities introduced through the dependencies.**
+
+**Prefer:**
+- official images from reputable maintainers
+- verified publisher images
+- internally curated base images
+- hardened images maintained by your platform team
+- approved private registries with access control
+- images with documented update cadence and support lifecycle
+
+**Avoid:**
+- random public images from personal namespaces
+- images with no Dockerfile or source repository
+- abandoned images
+- unsupported or end-of-life distributions
+- images that require running as root without explanation
+- images that install an SSH server for production use
+- images with unclear licensing or provenance
+
+A base image decision is not only a developer convenience decision. It is a supply-chain decision.
+
+Smaller images are usually easier to secure because they have fewer packages, fewer libraries, fewer utilities, and fewer scanner findings. But minimal images have tradeoffs.
+
+| Base Type               | Strength                                           | Tradeoff                                                         |
+| ----------------------- | -------------------------------------------------- | ---------------------------------------------------------------- |
+| Full distribution image | Familiar tools, easy debugging                     | Large attack surface, many packages                              |
+| Slim image              | Smaller, still operationally familiar              | May still include shell and package manager                      |
+| Alpine                  | Very small, common for simple workloads            | Uses musl libc, which can cause compatibility differences        |
+| Distroless              | No package manager or shell, small runtime surface | Harder interactive debugging                                     |
+| `scratch`               | Empty base, excellent for static binaries          | You must provide everything needed, such as CA certs if required |
+| Hardened vendor image   | Curated, patched, often signed and documented      | Vendor lock-in, subscription, or operational constraints         |
+
+**Use the smallest supported runtime image that your team can operate safely.**
+
+**Base image checklist:**
+- Who maintains it?
+- How often is it rebuilt?
+- What distribution and version is it based on?
+- Is the distribution still supported?
+- Is there a public Dockerfile or build recipe?
+- Does it run as root by default?
+- Does it include a shell, package manager, compiler, SSH server, or debugging tools?
+- Is it signed?
+- Does it publish SBOMs or provenance?
+- Can we pin it by digest?
+- Can our scanners correctly identify its packages?
+- Do we have a plan for rebuilding when the base digest changes?
+
+### Using Docker Hardened Images
+
+[Docker Hardened Images (DHI)](https://docs.docker.com/dhi/) provide minimal, secure, and production-ready container images, Helm charts, and system packages maintained by Docker. Designed to reduce vulnerabilities and simplify compliance.
+
+You can pull and run a DHI like any other Docker image. Note that Docker Hardened Images are designed to be minimal and secure, so they may not include all the tools or libraries you expect in a typical image.
+
+> **[Considerations when adopting DHIs](https://docs.docker.com/dhi/how-to/use/#considerations-when-adopting-dhis)**: Docker Hardened Images are intentionally minimal to improve security. If you're updating existing Dockerfiles or frameworks to use DHIs, keep in mind that runtime images don't include shells or package managers, run as non-root users by default, and may have different configurations than images you're familiar with.
+
+Copmare the DHI with a standard image:
+
+```bash
+# Create a free Docker Hub account and login in to pull the DHI
+sudo docker login dhi.io
+
+# Pull the DHI and a standard image for comparison
+sudo docker pull dhi.io/python:3.13
+sudo docker pull python:3.13
+
+# Run the image to confirm everything works:
+sudo docker run --rm dhi.io/python:3.13 python -c "print('Hello from DHI')"
+sudo docker run --rm python:3.13 python -c "print('Hello from standard image')"
+
+# Compare the images:
+sudo docker image ls dhi.io/python:3.13
+sudo docker image ls python:3.13
+
+sudo docker history dhi.io/python:3.13
+sudo docker history python:3.13
+```
+
+Let's explore the differences in the image with the [`dive`](https://github.com/wagoodman/dive) tool:
+
+```bash
+# Install dive
+DIVE_VERSION=$(curl -sL "https://api.github.com/repos/wagoodman/dive/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+curl -fOL "https://github.com/wagoodman/dive/releases/download/v${DIVE_VERSION}/dive_${DIVE_VERSION}_linux_amd64.deb"
+sudo apt install ./dive_${DIVE_VERSION}_linux_amd64.deb
+
+# Inspect the standard image visually
+sudo dive python:3.13
+
+# Inspect the DHI image visually
+sudo dive dhi.io/python:3.13
+```
+
+### Using the `scratch` and the "distroless" base images
+
+When packaging compiled binaries for production, minimizing the container's footprint is one of the most effective ways to optimize performance and harden security. Two primary strategies exist for creating these ultra-lean environments: building completely **[from scratch](https://docs.docker.com/build/building/base-images/#create-a-base-image)** or utilizing **[Google's "distroless"](https://github.com/GoogleContainerTools/distroless)** base images.
+
+While both approaches eliminate standard operating system bloat, they serve slightly different needs in production workflows.
 
 
+| Feature    | `FROM scratch`  | `FROM gcr.io/distroless/static-debian13`   |
+| --------------- | --------- | ---------- |
+| **Base Size** | 0 bytes  | ~2 MB to 3 MB   |
+| **OS Packages**  | None   | None  |
+| **System Libraries**  | None (Requires purely static binaries)   | Common minimal runtime dependencies (glibc, libssl)  |
+| **SSL/TLS Certificates**  | No (Must be manually copied if needed) | Yes (Pre-installed and updated)    |
+| **User Management** | No `/etc/passwd` (Runs as root by default)  | Includes a non-root user (`nobody:nogroup`, UID 65534) |
+| **Primary Language**  | Go, Rust (Purely static compiled languages)    | C, C++, Rust, Go, or dynamic runtimes (Node/Python)       |
+
+
+- **Dockerfile Example (`scratch`):** `scratch` is an explicitly empty starting point. It contains absolutely nothing - no shell, no libraries, no users, and no SSL certificates. If your application needs to make an HTTPS request, it will fail unless you manually bundle the root certificates. To use `scratch`, you must build your binary inside a build container using a multi-stage workflow, ensuring that your compiler outputs a completely self-contained, statically linked binary.
+
+```bash
+# Create a simple application file
+cat > main.go <<'EOF'
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("Hello from a completely empty container!")
+}
+EOF
+
+# Create a Dockerfile that builds the binary and then packages it from scratch
+cat > Dockerfile <<'EOF'
+# Stage 1: The Build Environment
+FROM golang:1.24-bookworm AS builder
+WORKDIR /app
+COPY main.go .
+# Disable CGO to force a purely static binary
+RUN CGO_ENABLED=0 GOOS=linux go build -o myapp main.go
+
+# Stage 2: The Final Razor-Thin Image
+FROM scratch
+# Manually bring over SSL certs so our binary can make HTTPS calls
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /app/myapp /myapp
+ENTRYPOINT ["/myapp"]
+EOF
+
+# Build the image
+sudo docker build -t myapp:scratch .
+
+# Run the image
+sudo docker run --rm myapp:scratch
+
+# Check the image with dive
+sudo dive myapp:scratch
+```
+
+- **Dockerfile Example (`distroless/static`)**: "Distroless" images, maintained by Google, restrict the runtime environment to only your application and its dependencies. They contain no package managers, shells, or standard terminal utilities. However, unlike `scratch`, they include critical system abstractions that production applications rely on, such as timezone data, SSL/TLS certificates, standard C libraries (`glibc`), and pre-configured non-root system users. Because the base image includes standard system prerequisites, your multi-stage setup becomes much cleaner and less prone to runtime crashes.
+
+```bash
+# Create a Dockerfile that builds the binary and then packages it with distroless
+cat > Dockerfile.distroless <<'EOF'
+# Stage 1: The Build Environment
+FROM golang:1.24-bookworm AS builder
+WORKDIR /app
+COPY main.go .
+RUN CGO_ENABLED=0 GOOS=linux go build -o myapp main.go
+
+# Stage 2: The Production Image
+# 'static' is the smallest distroless variant, designed for static binaries
+FROM gcr.io/distroless/static-debian13:latest
+COPY --from=builder /app/myapp /myapp
+# Automatically switches to a secure, non-root user included in the base image
+USER 65534:65534
+ENTRYPOINT ["/myapp"]
+EOF
+
+# Build the image
+sudo docker build -f Dockerfile.distroless -t myapp:distroless .
+
+# Run the image
+sudo docker run --rm myapp:distroless
+
+# Check the image with dive
+sudo dive myapp:distroless
+```
+If we inspect both resulting production images using tools like docker image ls or a low-level filesystem extraction, the differences become visually clear.
+- The `scratch` image consists of a single layer containing just your binary file (and your manually copied certificates). It has no concept of file ownership outside of what you explicitly configure.
+- The `distroless` image provides a small foundational layer that sets up standard Unix paths like `/etc`, `/var`, and `/tmp`, maps a default non-privileged user profile, and keeps system root certificates updated automatically through upstreams like Debian.
+
+While FROM scratch offers the absolute theoretical minimum attack surface, **"distroless" is generally the superior choice for enterprise production binaries**:
+1. **Security by Default (Non-Root Execution)**_ Running a container as the root user is a critical vulnerability. In a scratch container, configuring a custom non-root user requires manually generating and copying `/etc/passwd` files into the image. Distroless images ship with a secure nobody user built-in, making risk mitigation as simple as adding `USER 65534:65534` to your Dockerfile.
+2. **Maintenance and Compliance**: Production applications constantly interact with the outside world via TLS/SSL. If you choose scratch, you are responsible for manually updating root certificates every time an automated image build triggers. Distroless base images handle this up-stream; simply pulling the latest base patch automatically patches underlying certificate authorities and critical system libraries.
+3. **Dynamic Linking Compatibility**: Many compiled binaries still rely on standard system bindings (like `glibc` for network lookups or cryptographic tasks). Compiling with `CGO_ENABLED=0` works perfectly for pure Go or Rust, but if your code pulls in a legacy C library, a scratch container will immediately crash with a misleading file not found error. Distroless provides specific variants (like `distroless/base`) that include `glibc`, giving you the safety of a shell-less image without sacrificing system library access.
+
+> Use scratch only when you are deploying an entirely autonomous utility that requires no OS primitives, no network certificates, and no external library bindings. For everything else, default to distroless to ensure standard operational compliance, user isolation, and maintainability.
+
+## Docker Build
+
+Modern Docker Build uses Buildx as the client and BuildKit as the builder backend. Docker’s documentation describes Docker Build as a client-server architecture: Buildx is the user interface for running and managing builds, while BuildKit executes the build steps. When you run docker build, you are using Buildx to send a build request to BuildKit.
 
 
 
@@ -418,29 +619,9 @@ Best practices for image referencing:
 ---
 
 
-## Selecting Base Images
-- Use trusted base images. -> show how easy is to get a bad image, docker official images, hardened images, curated internal images.
-- inspecting images
-- Avoid stale base images.
-- schech image, alpine, mininal images
 
 
-### 1. Start With A Governed Source
 
-Prefer:
-
-- official images from reputable maintainers
-- verified publisher images
-- internally curated base images
-- approved registries with access control and retention policies
-
-Do not normalize:
-
-- random public images from personal namespaces
-- abandoned images with no update cadence
-- images built on unsupported or end-of-life distributions
-
-## Docker Build
 - docker build, buildx, and BuildKit are the main tools for building images
 - https://docs.docker.com/build/concepts/overview/
 
