@@ -13,6 +13,13 @@
 - explicit non-root runtime user
 -  Minimize The Runtime Image
 
+
+## Using build variables
+- https://docs.docker.com/build/building/variables/
+
+> We will show how to use build secret variables in the Part 4 of the course.
+
+
 ### Step 4: Scan Both Images
 
 ```bash

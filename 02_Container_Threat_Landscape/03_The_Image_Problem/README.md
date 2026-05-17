@@ -883,31 +883,56 @@ Relying on developers to remember these flags is not a viable security strategy.
 - **Cache Sanitation**: Use `sudo docker builder prune` periodically within your build infrastructure to wipe out stale local build caches and reclaim disk space.
 
 
-## Using build variables
-- https://docs.docker.com/build/building/variables/
-
-> We will show how to use build secret variables in the Part 4 of the course.
-
 ## Building Multiplatform Images
-- https://docs.docker.com/build/building/multi-platform/
 
-Container images can be built to support multiple CPU architectures, including the
-common options amd64 typically used for Intel-based chips, and arm64 for ARMbased
-machines. A multiplatform image contains a manifest list that references
-architecture-specific machines. You can use Docker to inspect a multiplatform image,
-like this:
+Docker famously solves the "it works on my machine" dilemma by packaging applications alongside their entire dependency tree. However, containerization alone only solves part of the environmental friction. Because containers share the host operating system's kernel, the binary code executed inside a container must be inherently compatible with the host’s underlying CPU architecture.
 
-docker manifest inspect alpine
+A binary compiled for an Intel or AMD x86-64 processor (`linux/amd64`) cannot run natively on an ARM-based processor (`linux/arm64`), such as an Apple Silicon Mac or an AWS Graviton EC2 instance, without relying on slow, resource-heavy CPU emulation.
 
-The manifest includes a digest identifying the image for each supported platform.
-When pulling an image, the container runtime retrieves the image that matches the
-platform it’s running on.
-The contents of these per-platform images are independent of each other. If your
-organization is running images on a mix of different platforms, you’ll need to make
-sure that the images are scanned for vulnerabilities and insecure configurations for all
-the different platforms, because there’s no guarantee that the content will be the same.
-We’ll discuss image scanning in Chapter 8.
----
+To bypass this hardware barrier, modern workflows utilize [multiplatform builds](https://docs.docker.com/build/building/multi-platform/). This technique allows a single build invocation to target multiple operating systems or CPU architectures simultaneously, wrapping them into a single, unified image tag.
+
+Multiplatform images have a completely different architectural structure than traditional single-platform images:
+- **Single-Platform Image**: Contains a single image manifest pointing directly to a specific configuration file and a specific set of layer tarballs.
+- **Multiplatform Image**: Utilizes a parent wrapper called a manifest list (or an OCI Image Index). This manifest list does not contain any application layers itself; instead, it acts as a directory or a routing table pointing to separate, architecture-specific manifests.
+
+![Multiplatform Image Structure](./images/img07.svg)
+
+Source: https://docs.docker.com/build/building/multi-platform/
+
+When you push a multiplatform image to a registry, the registry stores the master manifest list along with all individual architecture variants. When a client runs docker pull or docker run, the container runtime fetches the master manifest list, detects the host machine's native architecture, and automatically downloads only the matching variant.
+
+You can inspect the multiplatform layout of any public image using the docker manifest command:
+```bash
+sudo docker manifest inspect nginx:latest
+```
+
+The output will expose a JSON array of manifests, each displaying its target platform (e.g., `architecture: amd64` vs `architecture: arm64`) alongside its distinct cryptographic digest.
+
+### The Security Blind Spot in Multi-Platform Container Images
+
+From a security perspective, it is risky to assume that every architecture-specific image behind a multi-platform tag contains the same software. A multi-platform image tag usually points to a manifest list or image index. That index references separate images for each target platform, such as `linux/amd64`, `linux/arm64`, or `linux/arm/v7`. Each platform variant has its own image manifest, layers, filesystem contents, packages, binaries, and digest.
+
+Although these variants may be built from the same Dockerfile, they are not guaranteed to be identical. Base image maintainers may use different package versions, source libraries, compiler options, or patches depending on the target architecture. Build pipelines may also include platform-specific logic or rely on different package repositories.
+
+As a result, a vulnerability may exist in one architecture variant but not another. For example, the `linux/amd64` version of an image could contain a vulnerable library, while the `linux/arm64` version remains unaffected - or the reverse.
+
+**If your organization uses containers across multiple hardware architectures, your vulnerability scanning must cover every platform you actually deploy.**
+
+### Hands-On Example: Multi-Architecture Build for a Go Application
+
+To execute a multiplatform build, you must use BuildKit. While the standard Docker daemon can only load a single architecture into its legacy local image store at a time, BuildKit bypasses this by building the variants concurrently and exporting them directly to a remote registry or an OCI artifact bundle.
+
+Go is an excellent language for multi-architecture demonstrations because the Go compiler natively supports cross-compilation out of the box using environment variables (`GOOS` and `GOARCH`).
+
+We will use BuildKit's automatic platform arguments (`BUILDPLATFORM`, `TARGETOS`, and `TARGETARCH`). These variables are automatically populated by the builder based on the platforms requested in the build command.
+
+1. Move to the `examples/02_multi_arch_build` directory and check the `main.go` and `Dockerfile` files.
+2. To build for multiple platforms at once, pass a comma-separated list to the `--platform` flag.
+```bash
+sudo docker buildx build --platform linux/amd64,linux/arm64 -t go-app:1.0 .
+```
+3. Check the resulting image with `sudo docker image ls go-app:1.0`. 
+
 
 ## General best practices for images
 
