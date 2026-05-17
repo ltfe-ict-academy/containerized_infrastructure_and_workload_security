@@ -1264,6 +1264,8 @@ Two useful tools for Dockerfile review are [**Hadolint**](https://github.com/had
 
 ## Generating SBOMs
 
+https://chatgpt.com/g/g-p-6a05bbc989148191b3eace3ab72144bf-pesco-container-security/c/6a05c1c3-758c-8326-a312-ea39905455c6
+
 Container images can contain lots of different software components:
 • As you saw in Chapter 4, a container image includes a filesystem, often based on
 a Linux distribution, containing all the files and directories included in that
@@ -1369,12 +1371,15 @@ As discussed previously, it’s good practice to create an SBOM to enumerate the
 of an image. Ideally you’ll have a language-specific SBOM for your application
 code, but you’ll also want to record information about the base image and installed
 OS packages.
+
+
 Ideally, the SBOM should be generated at build time, for example, with docker build
---sbom=true. You can also generate an SBOM for an existing image, and there are several
+`--sbom=true`. You can also generate an SBOM for an existing image, and there are several
 tools commonly used for this, including syft and trivy. SBOM information is often
 generated in common formats SPDX or CycloneDX. To generate an SBOM in SPDX format
 for the latest nginx image, I can run this command:
-$ trivy image --format spdx-json nginx
+`$ trivy image --format spdx-json nginx`
+
 The output contains information about the packages in the image, licensing information,
 relationships between packages, and data about the tool that generated the
 report. When I ran this tool, the output was more than 8,000 lines long, so I won’t
@@ -1394,40 +1399,6 @@ You can either upload it to the registry using OCI artifact support with a refer
 the image, or you can sign and attach it to the image. Let’s consider how you can sign
 images and other artifacts.
 
-### 6. Scan Early, Scan Late, And Re-Scan
-
-A solid image security process scans:
-
-- before build, to catch obvious context problems
-- after build, to assess the actual image artifact
-- in the registry, because vulnerabilities are discovered after images are pushed
-- continuously, because yesterday's image may become today's incident
-
-Good scanning workflow:
-
-- developer scan for fast feedback
-- CI scan for policy enforcement
-- registry or platform scan for continuous re-evaluation
-
-### 7. Generate SBOMs
-
-An SBOM gives you a component inventory. That matters for:
-
-- vulnerability triage
-- incident response
-- supplier communication
-- proving what was shipped
-
-With Docker Buildx:
-
-```bash
-docker buildx build --sbom -t registry.example.com/course/backend:1.0.0 --push .
-```
-
-Important nuance:
-
-- SBOM and provenance attestations are most useful when pushed to a registry-backed workflow
-- depending on the image store, local builds may not preserve attestations the way teams expect -->
 
 An SBOM, or Software Bill of Materials, is an inventory of software components. For images, it helps answer:
 
@@ -1481,6 +1452,8 @@ Re-scan SBOMs and images when new vulnerability intelligence appears.
 Use SBOMs during incident response to identify affected services quickly.
 
 OWASP’s Software Component Verification Standard frames software supply-chain risk around identifying controls and best practices that reduce supply-chain risk; it specifically emphasizes supply-chain visibility and incremental adoption of controls
+
+
 
 
 ## Image Security Scanning
@@ -1596,68 +1569,4 @@ Secret detection is heuristic and pattern-based.
 Malware and intentional backdoors are not fully solved by CVE scanning.
 Distroless images may reduce findings, but they can still contain vulnerable application code.
 Scanners can miss custom-compiled libraries or unusual package layouts.
-
-
-
-
-<!-- 
-
-
-
-## Minimum 2026 CI/CD Gate For Images
-
-For a professional baseline, a pipeline for containerized workloads should do at least this:
-
-1. Build with a pinned base version and refresh base metadata with `--pull`.
-2. Scan the built image for vulnerabilities, secrets, and misconfigurations.
-3. Fail the pipeline on policy-breaking findings, such as critical issues with fixes available or forbidden image properties.
-4. Generate SBOM and provenance attestations.
-5. Push the image to a governed registry.
-6. Sign the pushed digest.
-7. Enforce verification and image policy at deployment time.
-
-Typical deployment policy checks:
-
-- signature valid
-- approved registry only
-- digest-based image reference only
-- no `:latest`
-- image not older than allowed threshold
-- no critical vulnerabilities with fixes available
-- required provenance present -->
-
-
-- Rebuild images regularly.
-- Review Dockerfiles and build pipelines.
-- Avoid pulling random images directly into production.
-- Monitor upstream security advisories.
-
-| Risk | What It Looks Like | Why It Matters | Better Direction |
-| --- | --- | --- | --- |
-| Untrusted source | Pulling random public images | Malicious content, weak maintenance, hidden dependencies | Prefer curated sources, official images, verified publishers, or internal approved registries |
-| Mutable tags | `FROM python:latest` | Builds are non-reproducible and can drift silently | Pin version, and for production pin digest |
-| Bloated base images | Full distro plus shells, package managers, editors, tools | Larger attack surface and more CVEs | Use the smallest supported runtime image that still fits operations |
-| Stale images | Old base image never rebuilt | Known fixes never reach production | Rebuild continuously, not only when app code changes |
-| Hidden baggage in build context | `COPY . .` from a messy repo | Internal files, notes, caches, test data, and secrets may enter the image | Use `.dockerignore` and copy only what is needed |
-| Secrets in layers | Copying `.env`, private keys, or tokens during build | Secrets may persist in image history and exported layers | Use BuildKit secrets and keep secrets out of the context |
-| Build tools in runtime | Compiler, shell, package manager, git left in production image | Increases post-exploitation options and image size | Use multi-stage builds or dedicated runtime images |
-| No provenance | No proof of what source or builder produced the image | Harder to trust, audit, or gate deployments | Generate provenance and attach it to pushed images |
-| No SBOM | No inventory of packaged components | Harder to triage CVEs and respond to incidents | Generate and retain SBOMs per build |
-| No signature verification | Anybody can push "something" to a registry path if governance is weak | Consumers cannot verify publisher integrity | Sign images and verify at deploy time |
-| Scanner overconfidence | "Trivy says zero criticals, so we are safe" | Misses misconfigs, malicious code, exploitability context, and some package edge cases | Treat scanning as necessary but insufficient |
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
