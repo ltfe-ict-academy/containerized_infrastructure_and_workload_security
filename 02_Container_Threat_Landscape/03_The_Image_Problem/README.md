@@ -847,34 +847,40 @@ While FROM scratch offers the absolute theoretical minimum attack surface, **"di
 
 ## Rebuild your images often
 
-Docker's build cache drastically speeds up build times by reusing existing layers when an instruction hasn't changed. However, security teams must recognize that the cache can preserve stale, vulnerable assumptions.
+One of the most common image security failures is simple neglect. Because container images are immutable, building an image captures a frozen snapshot of dependencies, base images, and system libraries at that exact moment in time.
 
-Docker checks each Dockerfile instruction against cached layers based on the literal command string. For example, if you have `RUN apt-get -y update`, Docker matches the string text. The files residing on the remote package server are not examined to determine if the cache should be invalidated. Therefore, a successful rebuild does not guarantee that your OS packages were actually refreshed.
+Many teams only trigger a container build when their application code changes. This is a dangerous mistake that leads to "stale" security postures. If an application's code doesn't change for six months, the running container will completely miss six months of critical OS security updates and patch releases, leaving it highly vulnerable to exploits.
 
-Practical guidance for cache security:
-- Use `docker build --pull -t course/backend:1.0 .` in CI pipelines to force Docker to check the registry for newer versions of your base image.
-- Use `docker build --no-cache -t course/backend:1.0 .` when patch freshness is absolutely critical.
-- Use `docker builder prune` to periodically clear out stale local caches.
+Docker’s build cache is incredibly useful for speeding up development, but security teams must understand its limitations. Docker checks each **Dockerfile instruction against cached layers by looking at the literal command string**.
 
-Implement scheduled CI rebuilds, rather than relying solely on application-code-triggered builds, to ensure upstream security patches are pulled in.
+Consider this standard instruction:
+```Dockerfile
+# syntax=docker/dockerfile:1
+FROM ubuntu:24.04
+RUN apt-get -y update && apt-get install -y --no-install-recommends python3
+```
 
-https://docs.docker.com/build/building/best-practices/#rebuild-your-images-often
+When rebuilding this image, Docker evaluates the string `RUN apt-get -y update...`. If that text matches a previously cached layer, Docker reuses the existing layer. **The builder does not query the remote package repository to see if new security patches are available**. A successful rebuild using the cache does not mean your software packages were actually upgraded.
 
-<!-- ### 10. Rebuild Images Continuously
+To break past cached assumptions and guarantee patch freshness, you must explicitly instruct the builder how to handle upstream dependencies:
+- **Force Fresh Base Images (`--pull`)**: Upstream publishers constantly update tags (like `ubuntu:24.04` or `node:22-slim`) with security fixes. By default, if Docker finds the tag locally, it won't check the registry. Using the `--pull` flag forces Docker to check for and download the newest digest of the base image:
+  ```bash
+  sudo docker build --pull -t course/backend:1.0 .
+  ```
+- **Invalidate Layer Cache (`--no-cache`)**: To force package managers (like `apt`, `npm`, or `pip`) to bypass cached layers and fetch the absolute latest dependencies from remote servers, use the `--no-cache` flag:
+  ```bash
+  sudo docker build --no-cache -t course/backend:1.0 .
+  ```
+- **The Ultimate Fresh Build**: Note that `--no-cache` does not fetch a fresh base image, and `--pull` does not invalidate downstream package manager layers. For a completely secure, fully refreshed production build, combine both flags:
+  ```bash
+  sudo docker build --pull --no-cache -t course/backend:1.0 .
+  ```
 
-One of the most common image failures is simple neglect.
-
-Teams often rebuild only when app code changes. That means:
-
-- base image fixes are missed
-- distro package fixes are missed
-- scanner results become stale
-
-Mature pattern:
-
-- scheduled rebuilds even when app code is unchanged
-- automatic pull requests or tickets when base image digests drift
-- policy around maximum image age -->
+Relying on developers to remember these flags is not a viable security strategy. Instead, **production environments should enforce the following operational guardrails**:
+- **Scheduled Rebuilds**: Implement automated, time-triggered CI/CD pipelines (e.g., nightly or weekly) to rebuild and redeploy images, even if no application code has changed. This ensures underlying OS vulnerabilities are patched continuously.
+- **Monitor Base Image Digest Drift**: Set up automated scanning tools or alerts to detect when an upstream base image layer changes, triggering automatic pull requests to rebuild downstream applications.
+- **Establish a Maximum Image Age Policy**: Enforce an organizational policy where running containers exceeding a specific age threshold (e.g., 30 days) are flagged for mandatory rebuilding and cycling, keeping your runtime environment resilient against newly discovered zero-day vulnerabilities.
+- **Cache Sanitation**: Use `sudo docker builder prune` periodically within your build infrastructure to wipe out stale local build caches and reclaim disk space.
 
 
 ## Using build variables
