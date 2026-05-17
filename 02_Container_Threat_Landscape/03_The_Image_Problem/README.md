@@ -936,115 +936,195 @@ sudo docker buildx build --platform linux/amd64,linux/arm64 -t go-app:1.0 .
 
 ## General best practices for images
 
-The instructions for building an image come from a Dockerfile. Each stage of the
-build involves running one of these instructions, and if a bad actor is able to modify
-the Dockerfile, it’s possible for them to take malicious actions, including:
-• Adding malware or cryptomining software into the image
-• Accessing build secrets
-• Enumerating the network topology accessible from the build infrastructure
-• Attacking the build host
-90 | Chapter 7: Supply Chain Security
-It may seem obvious, but the Dockerfile (like any source code) needs appropriate
-access controls to protect against attackers adding malicious steps into the build.
-The contents of the Dockerfile also have a huge bearing on the security of the image
-that the build produces. Let’s turn to some practical steps you can take in the
-Dockerfile to improve image security.
+At this point, we have already seen that a container image is not just “the application packaged in Docker.” It is a layered supply-chain artifact created from a Dockerfile, a build context, a base image, package repositories, build infrastructure, and registry behavior.
 
-- **Decouple applications**: Each container should have only one concern. Decoupling applications into multiple containers makes it easier to scale horizontally and reuse containers.
-- **Create ephemeral containers**: The image defined by your Dockerfile should generate containers that are as ephemeral as possible. Ephemeral means that the container can be stopped and destroyed, then rebuilt and replaced with an absolute minimum set up and configuration.
-- **Don't install unnecessary packages**: Avoid installing extra or unnecessary packages just because they might be nice to have. For example, you don’t need to include a text editor in a database image. When you avoid installing extra or unnecessary packages, your images have reduced complexity, reduced dependencies, reduced file sizes, and reduced build times.
-- **Sort multi-line arguments**: Whenever possible, sort multi-line arguments alphanumerically to make maintenance easier. This helps to avoid duplication of packages and make the list much easier to update. This also makes PRs a lot easier to read and review. Adding a space before a backslash (`\`) helps as well.
-- **Leverage build cache**: When building an image, Docker steps through the instructions in your Dockerfile, executing each in the order specified. For each instruction, Docker checks whether it can reuse the instruction from the build cache. As soon as the cache is broken, Docker executes all the instructions that follow, even if they haven’t changed.
-- **Pin base image versions**: To fully secure your supply chain integrity, you can pin the image version to a specific digest. By pinning your images to a digest, you're guaranteed to always use the same image version, even if a publisher replaces the tag with a new image.
+That means image security is not one control. It is a set of habits that reduce the chance of shipping vulnerable, unnecessary, malicious, or untrusted content into the environments where containers will eventually run.
 
-Non-root USER
-The USER instruction in a Dockerfile specifies that the default user identity for
-running containers based on this image isn’t root. In Chapter 11 I’ll cover some
-very good reasons why you should avoid running as root and should specify a
-non-root user in all your Dockerfiles wherever possible.
+The instructions for building an image come from a Dockerfile. Each stage of the build involves running one of these instructions, and if an attacker can modify the Dockerfile, they can potentially:
+- add malware or cryptomining software into the image,
+- access build-time secrets,
+- enumerate the internal network reachable from the build infrastructure,
+- attack the build host,
+- modify the final application artifact,
+- weaken runtime defaults such as `USER`, `ENTRYPOINT`, or exposed ports.
 
-RUN commands
-Let’s be absolutely clear: a Dockerfile RUN command lets you run any arbitrary
-command. If an attacker can compromise the Dockerfile with the default security
-settings, that attacker can run any code of their choosing. If you have any reason
-not to trust people who can run arbitrary container builds on your system, I can’t
-think of a better way of saying this: you have given them privileges for remote
-code execution. Make sure that privileges to edit Dockerfiles are limited to trusted
-members of your team, and pay close attention to code reviewing these
-changes. You might even want to institute a check or an audit log when any new
-or modified RUN commands are introduced in your Dockerfiles.
+It may sound obvious, but the Dockerfile needs the same level of review and access control as application source code. In many organizations, it deserves even more attention, because the Dockerfile decides what software is installed, what commands execute during build, what user the container runs as, and what files become part of the final image.
 
-Volume mounts
-We often mount host directories into a container through volume mounts. As
-you will see in Chapter 11, it’s important to check that Dockerfiles don’t mount
-sensitive directories like /etc or /bin into a container.
+Docker’s own best-practice guidance emphasizes reducing image size, rebuilding regularly, excluding unnecessary files, creating ephemeral containers, avoiding unnecessary packages, decoupling applications, sorting multi-line arguments, leveraging the build cache, pinning base image versions, and building/testing images in CI. These are not only optimization practices. They are security practices too.
 
-Don’t include sensitive data in the Dockerfile
-In Chapter 6, you saw some mechanisms for safely passing secrets during the
-build process, and we’ll discuss sensitive data and secrets for runtime in more
-detail in Chapter 14. Please understand that including credentials, passwords, or
-other secret data in an image makes it easier for those secrets to be exposed.
+### Treat Dockerfile changes as security-sensitive changes
 
-Avoid setuid binaries
-As discussed in Chapter 2, it’s a good idea to avoid including executable files with
-the setuid bit, as these could potentially lead to privilege escalation.
+A small Dockerfile change can have large impact. Consider this pull request:
+```Dockerfile
+RUN curl -fsSL https://example.com/install.sh | sh
+```
 
-Avoid unnecessary code
-The smaller the amount of code in a container, the smaller the attack surface.
-Avoid adding packages, libraries, and executables into an image unless they are
-absolutely necessary. For the same reason, if you can base your image on the
-scratch image or one of the distroless options, you’re likely to have dramatically
-less code—and hence less vulnerable code—in your image.
+This one line can:
+- download remote code,
+- execute it during the build,
+- access network resources from the builder,
+- read files available in the build environment,
+- write files into the image,
+- influence every deployment that later uses the image.
 
-Include everything that your container needs
-If the previous point exhorted you to exclude superfluous code from a build, this
-point is a corollary: do include everything that your application needs to operate.
-If you allow for the possibility of a container installing additional packages at
-runtime, how will you check that those packages are legitimate? It’s far better to
-do all the installation and validation when the container image is built and create
-an immutable image. See “Immutable Containers” on page 111 for more on why
-this is a good idea.
+A secure review process should treat Dockerfile changes as sensitive, especially changes involving:
+- new or modified RUN instructions,
+- new base images,
+- new package repositories,
+- new package managers,
+- new `curl`, `wget`, `git clone`, or remote downloads,
+- new `ARG` or `ENV` values,
+- new `COPY . .` patterns,
+- new `USER root` or removed `USER` instructions,
+- new `VOLUME`, `EXPOSE`, or `HEALTHCHECK` directives,
+- dependency lockfile changes.
 
-Avoid dependency confusion
-Here are some routes to consider for avoiding dependency confusion in your
-Dockerfiles:
-• As mentioned already, the base image is specified in the Dockerfile’s FROM
-command. Identify the version you want to use, preferably by hash, but at
-least by version tag rather than relying on latest. Specify the registry explicitly,
-too, to make sure that the system doesn’t fall back to an unexpected
-default location.
-• Only use base images from sources that you trust. Many organizations insist
-that they should be pulled from a private registry to ensure everyone is using
-an approved version. The images might originate from a public registry and
-are scanned and stored in the private registry if the organization’s security
-team considers it safe to use. Another option is to build base images from
-source.
-• Make sure package managers are pulling from the correct registries—for
-example, using --index-url on RUN pip install commands—or using
-set @my-org:registry on RUN npm config.
-• Consider pinning package dependency versions precisely, specifying versions
-in commands like RUN apt-get install.
-• Avoid letting the build automatically or implicitly upgrade dependencies. For
-example, use --require-hashes on RUN pip install.
-• Ideally, all the packages you need should be installed explicitly—for example,
-using the --no-install-recommends flag on RUN apt-get install.
+### Decouple applications
 
-Specifying all dependency versions explicitly ensures you’re using a precisely defined
-set of dependencies, avoiding dependency confusion, but there are some trade-offs.
-Unless you keep the versions updated, you might be missing important security
-updates that would be picked up automatically if you were to specify the versions
-more loosely. On the other hand, if you specify versions too loosely, you could easily
-find “breaking changes” in new versions of packages that are no longer compatible
-with your code. Vulnerability scanning can be used to spot when your image needs an
-important security update, and testing should spot when you encounter a breaking
-Dockerfile Security | 93
-change, but neither of these is 100% perfect. Finding the right balance between automatic
-updates and explicitly defined dependencies is a careful balance
+Each container should have one primary concern. Docker’s best-practice documentation describes this as decoupling applications so that each container is easier to scale horizontally and reuse. It also notes that “one process per container” is a useful rule of thumb, but not an absolute rule, because some legitimate applications spawn worker processes internally.
 
-- write about the many supply chain attacks in may 2026 and how to set up pnpm, uv so it chack for dependencies older than X days for exmaple
+### Create short-lived, ephemeral containers
 
-- https://github.com/hadolint/hadolint
-- https://www.checkov.io/7.Scan%20Examples/Dockerfile.html
+The image defined by your Dockerfile should create containers that can be stopped, destroyed, rebuilt, and replaced with minimal manual setup. Docker describes this as making containers as ephemeral as possible. A container should not rely on:
+- manual package installation after startup,
+- SSH access for configuration,
+- files written into the container filesystem as the only copy of important state,
+- runtime mutation of application code,
+- one-off administrator fixes inside a running container.
+
+### Do not install unnecessary packages
+
+Avoid installing extra or unnecessary packages just because they might be nice to have. For example, you don’t need to include a text editor in a database image. When you avoid installing extra or unnecessary packages, your images have reduced complexity, reduced dependencies, reduced file sizes, and reduced build times. Common unnecessary runtime tools include: `vim`, `nano`, `curl`, `wget`, `git`, `gcc`. These tools are helpful during development, but dangerous in production images because they increase the post-exploitation toolbox. If an attacker compromises the application, every extra utility becomes something they can use.
+
+A better pattern is to separate images by purpose:
+| Image Type    | Contains                                           | Used For                            |
+| ------------- | -------------------------------------------------- | ----------------------------------- |
+| Builder image | compilers, package managers, headers, source code  | building artifacts                  |
+| Runtime image | only application and runtime dependencies          | production deployment               |
+| Debug image   | shell, diagnostic tools, troubleshooting utilities | controlled incident/debug workflows |
+
+### Use a non-root `USER`
+
+If the service can run without root privileges, configure the image to run as a non-root user. Docker’s best-practice documentation recommends using `USER` when a service can run without privileges and shows creating a dedicated user and group in the Dockerfile.
+
+Exmaple:
+```Dockerfile
+FROM debian:13-slim
+
+RUN groupadd --system app \
+    && useradd --system --gid app --home-dir /app --no-create-home app
+
+WORKDIR /app
+COPY app /app/app
+
+RUN chown -R app:app /app
+
+USER app
+ENTRYPOINT ["/app/app"]
+```
+
+> We will cover more about the risks of running as root in Part 4.
+
+### Be suspicious of `RUN`
+
+A `RUN` instruction can execute arbitrary commands during build. It can install packages, download code, query internal services, print secrets to logs, or modify the final image.
+
+Bad patterns:
+```Dockerfile
+RUN curl -fsSL https://example.com/install.sh | sh
+RUN wget https://example.com/tool && chmod +x tool && ./tool
+RUN git clone https://github.com/random-user/random-project
+RUN echo "$TOKEN" > /root/.npmrc
+RUN apt-get update && apt-get install -y lots of packages we might need someday
+```
+
+Better patterns:
+```Dockerfile
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG TOOL_VERSION=1.2.3
+ARG TOOL_SHA256=<expected-sha256>
+
+RUN curl -fsSLo /tmp/tool.tar.gz "https://example.com/tool-${TOOL_VERSION}.tar.gz" \
+    && echo "${TOOL_SHA256}  /tmp/tool.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/tool.tar.gz -C /usr/local/bin \
+    && rm /tmp/tool.tar.gz
+```
+
+Review questions for every `RUN` instruction:
+| Question                                                 | Why It Matters                                    |
+| -------------------------------------------------------- | ------------------------------------------------- |
+| Does this command download remote code?                  | Remote code becomes part of the image             |
+| Is the download pinned by version and hash?              | Prevents silent upstream changes                  |
+| Does this command access internal systems?               | Builder network access may leak topology          |
+| Does this command use secrets?                           | Secrets may appear in layers, logs, or provenance |
+| Does this command install unnecessary tools?             | Increases attack surface                          |
+| Can this be moved to a builder stage?                    | Keeps runtime image smaller                       |
+| Can this be replaced with a verified package repository? | Reduces untrusted install paths                   |
+
+
+### Avoid setuid binaries
+
+Setuid binaries can allow a process to run with the privileges of the file owner, often root. In a container image, setuid files increase the risk of privilege escalation if an attacker gains code execution inside the container.
+
+Check an image filesystem for setuid and setgid files:
+```bash
+sudo docker run --rm -it image-name sh -c 'find / -perm /6000 -type f -exec ls -l {} \; 2>/dev/null'
+```
+
+### Avoid dependency confusion
+
+Dependency confusion happens when a package manager resolves a dependency from an unintended source, such as a public registry instead of an internal registry. In container builds, this risk is amplified because package installation often happens automatically inside RUN instructions.
+
+Common risk patterns:
+```Dockerfile
+RUN pip install internal-package
+RUN npm install @my-org/private-package
+RUN apt-get install internal-tool
+```
+
+If registry configuration is not explicit, the build may resolve from an unexpected location.
+
+| Ecosystem      | Safer Direction                                                               |
+| -------------- | ----------------------------------------------------------------------------- |
+| Base images    | Specify the registry explicitly and prefer private mirrors for approved bases |
+| Python         | Use `--index-url`, constraints, hashes, and internal package indexes          |
+| Node.js        | Use scoped registries and lockfiles                                           |
+| OS packages    | Use approved distro repositories or internal mirrors                          |
+| All ecosystems | Pin versions and review lockfile changes                                      |
+
+Example: explicit Python index:
+
+```Dockerfile
+RUN pip install \
+    --index-url https://pypi.company.example/simple \
+    --require-hashes \
+    -r requirements.txt
+```
+
+### Add dependency cooldowns for package freshness risk
+
+In 2026, package ecosystems saw a sharp increase in supply-chain attacks that targeted developer and CI/CD environments. The Axios incident showed a malicious npm dependency delivering platform-specific RAT payloads during installation, and Microsoft specifically noted that normal application behavior might remain unchanged while malicious activity happens during npm install or update.
+
+The May 2026 Mini Shai-Hulud wave was even more direct for build pipelines: Snyk reported that 84 malicious TanStack npm artifacts were published across 42 packages in a six-minute window, using TanStack’s legitimate release pipeline and trusted OIDC identity after the runner was hijacked. The campaign then spread to Mistral AI, UiPath, and other maintainers, and Snyk highlighted that this was a case where malicious packages could carry valid provenance because the legitimate build pipeline itself had been abused.
+
+> A package can be new, signed, published by a legitimate pipeline, and still be malicious.
+
+One defensive pattern is a **dependency cooldown: do not install packages that were published too recently**. Many malicious package versions are detected and removed within hours or days. Delaying adoption of brand-new releases can prevent your builds from becoming part of the first wave of compromise.
+
+Examples:
+- `pnpm` supports `minimumReleaseAge`, which defines the minimum number of minutes that must pass after a package version is published before pnpm will install it.
+- For Python projects using `uv`, the equivalent control is `exclude-newer`
+
+This policy is useful when the build resolves dependencies from public package indexes. It is especially useful in CI, where a fresh build might otherwise pick up a malicious package shortly after publication.
+
+### Scan Dockerfiles before building
+
+Image scanning happens after an image exists. Dockerfile scanning happens before the image is built. You want both.
+Two useful tools for Dockerfile review are [**Hadolint**](https://github.com/hadolint/hadolint?utm_source=chatgpt.com) and [**Checkov**](https://www.checkov.io/1.Welcome/Quick%20Start.html).
+
 
 ## Generating SBOMs
 

@@ -13,12 +13,106 @@
 - explicit non-root runtime user
 -  Minimize The Runtime Image
 
+- https://github.com/hadolint/hadolint
+- https://www.checkov.io/7.Scan%20Examples/Dockerfile.html
 
 ## Using build variables
 - https://docs.docker.com/build/building/variables/
 
 > We will show how to use build secret variables in the Part 4 of the course.
 
+## Hadolint
+
+Hadolint is a Dockerfile linter that parses Dockerfiles into an abstract syntax tree and applies rules on top of that structure. It also uses ShellCheck to lint shell code inside RUN instructions.
+
+Run Hadolint with Docker:
+
+sudo docker run --rm -i hadolint/hadolint < Dockerfile
+
+Or install it locally and run:
+
+hadolint Dockerfile
+
+Example CI step:
+
+hadolint Dockerfile
+hadolint docker/*.Dockerfile
+
+What Hadolint is good for:
+
+catching common Dockerfile mistakes,
+enforcing package-manager cleanup patterns,
+detecting unpinned packages in some contexts,
+warning about risky ADD usage,
+linting shell commands in RUN,
+improving Dockerfile consistency across teams.
+
+Hadolint is not a supply-chain scanner. It does not prove that dependencies are safe. It helps prevent known Dockerfile antipatterns before they become images.
+
+Checkov
+
+Checkov supports Dockerfile configuration scanning. Its Dockerfile checks validate whether Dockerfiles comply with best practices such as not running as root, including a health check, and not exposing SSH port 22. The documented CLI usage is checkov -d . --framework dockerfile.
+
+Install:
+
+pipx install checkov
+
+Scan the current directory:
+
+checkov -d . --framework dockerfile
+
+Scan a specific Dockerfile:
+
+checkov -f Dockerfile --framework dockerfile
+
+Example CI step:
+
+checkov -d . --framework dockerfile --quiet
+
+What Checkov is good for:
+
+policy-style Dockerfile checks,
+CI/CD enforcement,
+finding risky configuration patterns,
+unifying Dockerfile checks with other IaC checks.
+
+Hadolint and Checkov overlap, but they are not identical. A practical baseline is to run both:
+
+hadolint Dockerfile
+checkov -f Dockerfile --framework dockerfile
+
+## Use the build cache intentionally
+
+Build cache is useful, but it can also hide stale assumptions. Docker steps through Dockerfile instructions in order and checks whether each instruction can be reused from the build cache. Once cache is invalidated, Docker executes that instruction and the following instructions again.
+
+This means instruction ordering affects both speed and security.
+
+Less efficient pattern:
+
+FROM python:3.12-slim-bookworm
+
+WORKDIR /app
+COPY . .
+RUN pip install -r requirements.txt
+
+CMD ["python", "app.py"]
+
+Any application code change invalidates the COPY . . layer, which also invalidates the dependency installation layer.
+
+Better pattern:
+
+FROM python:3.12-slim-bookworm
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app.py .
+
+CMD ["python", "app.py"]
+
+Now dependency installation is cached separately from application code. This is faster, but it also makes dependency changes more visible in code review.
 
 ### Step 4: Scan Both Images
 
