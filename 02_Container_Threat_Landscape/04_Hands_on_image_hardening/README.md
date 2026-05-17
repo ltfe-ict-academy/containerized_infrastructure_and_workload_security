@@ -20,28 +20,140 @@ trivy image --scanners vuln,secret,misconfig image-problem:insecure
 trivy image --scanners vuln,secret,misconfig image-problem:hardened
 ```
 
+| Practice                                  | Why It Matters                                                       |
+| ----------------------------------------- | -------------------------------------------------------------------- |
+| Use trusted base images                   | Reduces risk from abandoned or malicious upstream images.            |
+| Pin meaningful versions                   | Avoids accidental drift from `latest`.                               |
+| Pin digests for production                | Gives exact artifact identity.                                       |
+| Keep build context small                  | Prevents accidental inclusion of secrets and internal files.         |
+| Use `.dockerignore`                       | Reduces context size and exposure.                                   |
+| Prefer `COPY` over `ADD`                  | Makes file inclusion more explicit.                                  |
+| Avoid `curl \| sh`                        | Prevents unverified remote code execution during build.              |
+| Verify downloads                          | Use checksums, signatures, or trusted package repositories.          |
+| Use multi-stage builds                    | Keeps compilers and build tools out of runtime images.               |
+| Run as non-root                           | Reduces impact of application compromise.                            |
+| Avoid secrets in `ARG`, `ENV`, and `COPY` | These can persist in metadata or layers.                             |
+| Use BuildKit secrets                      | Provides temporary build-time secret access.                         |
+| Add OCI labels                            | Improves ownership, auditability, and incident response.             |
+| Rebuild regularly                         | Pulls in base and package fixes after vulnerabilities are disclosed. |
+
+
+Dockerfiles And Build Best Practices
+
+A Dockerfile is a build script. It is not merely a recipe for the final image.
+
+Docker’s reference describes a Dockerfile as a text document containing commands a user could call on the command line to assemble an image. Instructions include FROM, RUN, COPY, ADD, ENV, USER, ENTRYPOINT, CMD, and others. Docker also states that instructions run in order and that FROM specifies the base image from which you are building.
+
+That order matters because it controls layers, cache behavior, file inclusion, and often security outcomes.
+
+Bad example
+FROM python:latest
+
+WORKDIR /app
+COPY . .
+
+RUN pip install -r requirements.txt
+RUN rm -f .env
+
+ENV API_TOKEN=dev-token
+CMD python app.py
+
+Problems:
+
+python:latest is mutable.
+COPY . . copies the whole context.
+.env may already be in a previous layer.
+ENV API_TOKEN=... persists in image metadata.
+It runs as root by default unless the base image changes that.
+Build and runtime dependencies are mixed.
+Dependency versions may not be pinned.
+There is no clear ownership, version, source, or SBOM.
+
+Docker explicitly warns that secrets should not be used in ARG or ENV because they persist in the final image, and recommends secret mounts instead.
+
+Better example
+# syntax=docker/dockerfile:1.8
+
+FROM python:3.12-slim-bookworm AS builder
+
+WORKDIR /build
+
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
+
+FROM python:3.12-slim-bookworm
+
+LABEL org.opencontainers.image.title="course-backend"
+LABEL org.opencontainers.image.description="Training backend service"
+LABEL org.opencontainers.image.source="https://example.com/course/backend"
+
+WORKDIR /app
+
+RUN groupadd --system app \
+    && useradd --system --gid app --home-dir /app app
+
+COPY --from=builder /wheels /wheels
+COPY requirements.txt .
+RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt \
+    && rm -rf /wheels
+
+COPY app.py .
+
+USER app
+EXPOSE 8080
+ENTRYPOINT ["python", "app.py"]
+
+This is not perfect, but it demonstrates better patterns:
+
+versioned base image
+multi-stage build
+narrower copy operations
+no .env
+no secrets in ARG or ENV
+runtime user is non-root
+labels add useful metadata
+build cache is used for performance without copying unnecessary files into the runtime image
+
+OWASP’s Docker Security Cheat Sheet recommends CI/CD scanning and Dockerfile checks such as ensuring a USER directive exists, pinning the base image version, pinning OS package versions, avoiding ADD in favor of COPY, and avoiding curl-bashing in RUN directives.
+
+Minimum 2026 Baseline For Image Pipelines
+
+For a professional container image pipeline, the minimum baseline should look like this:
+
+Build from an approved base image.
+Pin a meaningful base version; resolve and record the digest.
+Use a small, maintainable runtime base.
+Keep the build context narrow with .dockerignore.
+Avoid secrets in ARG, ENV, COPY, logs, and layers.
+Use BuildKit secret mounts for temporary build credentials.
+Use multi-stage builds to keep toolchains out of runtime images.
+Run as a non-root user by default.
+Generate SBOM and provenance attestations.
+Scan for vulnerabilities, secrets, and misconfigurations.
+Fail CI on policy-breaking findings.
+Push only to governed registries.
+Sign the pushed digest.
+Deploy by digest, not by mutable tag.
+Re-scan and rebuild regularly.
+
+OWASP’s supply-chain guidance for Docker specifically calls out provenance, SBOM generation, image signing, trusted registries, and secure deployment policy as key practices across the image lifecycle.
 
 
 
+The most important security ideas from this chapter are:
 
-Part 02 keeps the exact same application from Part 01, but now we stop treating it as "just a working demo". We treat it like an artifact that could be attacked, scanned, abused, and misused in practice.
+Images have structure: manifests, configs, indexes, layers, tags, and digests.
+Tags are convenient names; digests are exact identities.
+Layers preserve history, and deleted files may still exist in lower layers.
+Base images are security dependencies.
+Build context is part of the attack surface.
+Dockerfiles are build scripts and should be reviewed like code.
+Secrets must not enter images through COPY, ARG, or ENV.
+SBOMs help you know what you shipped.
+Scanners are essential evidence, but not complete truth.
+Mature teams rebuild, scan, sign, attest, and deploy by digest.
 
-This is the day where participants should start feeling uncomfortable with the Day 1 build.
-
-We use two versions of the same stack:
-
-- `compose.insecure.yaml` recreates the rough Day 1 build and adds controlled breakout-style demo services
-- `compose.production.yaml` rebuilds the same app with safer image construction and operational handling
-
-## Learning Goals
-
-By the end of this hands-on section, participants should be able to:
-
-- inspect insecure images instead of trusting them blindly
-- explain why broad images, broad copies, mutable tags, and root processes matter
-- show practical misconfiguration-based breakout paths
-- compare insecure and hardened images using concrete evidence
-- rebuild the same app with production-grade image practices without changing the business logic
 
 ## Folder Layout
 

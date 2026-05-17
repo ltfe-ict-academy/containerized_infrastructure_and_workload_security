@@ -485,7 +485,11 @@ The default filename to use for a Dockerfile is `Dockerfile`, without a file ext
 Some projects may need distinct Dockerfiles for specific purposes. A common convention is to name these `<something>.Dockerfile`. You can specify the Dockerfile filename using the `--file` flag for the docker `build command`.
 
 
+Regardless of which tool you use, the vast majority of container image builds are
+defined through a Dockerfile. The Dockerfile gives a series of instructions, each of
+which results in either a filesystem layer or a change to the image configuration.
 
+https://medium.com/microscaling-systems/spot-the-docker-difference-9f99adcc4aaf
 
 
 
@@ -529,6 +533,95 @@ Use a `.dockerignore` file aggressively to filter what the builder is allowed to
 
 This pattern ensures that if a developer accidentally drops a new secret file into the directory, it will be automatically blocked from the build context by default.
 
+
+## Multi-stage Builds
+
+A [**multi-stage build** is a Dockerfile pattern](https://docs.docker.com/build/building/multi-stage/) that uses more than one `FROM` instruction. Each `FROM` starts a new build stage, and each stage can use a different base image. You can then selectively copy only the files you need from one stage into another using `COPY --from=...`.
+
+This is useful because the tools needed to **build** an application are often not needed to **run** it. For example, a Go application needs the Go compiler to produce a binary, but the final runtime image does not need to contain the Go compiler, source code, package caches, or other build tools.
+
+The general pattern looks like this:
+```Dockerfile
+FROM builder-image AS build
+# install build tools
+# copy source code
+# compile or prepare the application
+
+FROM runtime-image AS runtime
+# copy only the final artifact from the build stage
+COPY --from=build /path/to/artifact /path/to/artifact
+```
+
+The main benefit is that the final image contains only the runtime artifacts. This usually makes the image:
+- smaller,
+- faster to pull and distribute,
+- easier to scan and reason about,
+- less likely to contain unnecessary vulnerable packages,
+- less useful to an attacker if the container is compromised.
+
+Docker’s documentation describes this as a way to keep Dockerfiles readable while copying only selected artifacts into the final image and leaving behind everything else. The final image can contain just the built binary or prepared application files, without the build tools used to create them.
+
+> Good read: [Using Multi-Stage Builds to Simplify And Standardize Build Processes](https://medium.com/capital-one-tech/multi-stage-builds-and-dockerfile-b5866d9e2f84)
+
+![Multi-stage Build](./images/img06.png)
+
+### Example: Go Application
+
+Go is a good example because it can produce a standalone binary. The first stage uses the Go toolchain to compile the program. The second stage starts from `scratch`, which is an empty image, and copies in only the compiled binary.
+
+```Dockerfile
+# syntax=docker/dockerfile:1
+
+FROM golang:1.25 AS build
+WORKDIR /src
+
+COPY <<EOF ./main.go
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("hello from a multi-stage Go image")
+}
+EOF
+
+RUN CGO_ENABLED=0 go build -o /hello ./main.go
+
+FROM scratch
+COPY --from=build /hello /hello
+CMD ["/hello"]
+```
+
+Copy the above Dockerfile into a directory and run the following commands from that directory to build and run the image:
+- `sudo docker build -t course/hello-go:1.0 .`
+- `sudo docker run --rm course/hello-go:1.0`
+
+The final image does not contain the Go compiler, the source code, or the intermediate build files. It contains only the `/hello` binary.
+
+### Example: Python Application
+
+Python is different from Go because Python applications usually still need a Python runtime. However, multi-stage builds are still useful. The build stage can install or compile dependencies, while the runtime stage starts from a clean image and receives only the prepared environment and application files.
+
+Assume the project contains these files (check the files at `./examples/01_multi_stage_python`):
+```
+.
+├── app.py
+├── requirements.txt
+└── Dockerfile
+```
+
+Move to the directory and build the image:
+- `cd examples/01_multi_stage_python`
+- `sudo docker build -t course/hello-python:1.0 .`
+- `sudo docker run --rm -p 8000:8000 course/hello-python:1.0`
+
+In this Python example, the final image still contains Python, because Python is required at runtime. However, the dependency installation work is separated from the final application stage. For applications that require compilers or development headers to build Python packages, this prevents those build tools from being included in the runtime image.
+
+### Multi-stage Builds and Security
+
+Multi-stage builds are not a complete security solution, but they are an important hardening technique. The final image should contain only what the application needs to run. Build tools, compilers, package manager caches, source code, test data, and temporary files should normally remain in earlier stages.
+
+A smaller final image reduces the attack surface and makes vulnerability scanning easier to interpret. However, the build stages still execute code during the build process, so the build machine and build context must still be treated as security-sensitive.
 
 ## Selecting Base Images
 
@@ -762,10 +855,6 @@ Mature pattern:
 - policy around maximum image age -->
 
 
-
-## Multi-stage builds
-- https://docs.docker.com/build/building/multi-stage/
-
 ## Using build variables
 - https://docs.docker.com/build/building/variables/
 
@@ -773,9 +862,40 @@ Mature pattern:
 
 ## Building Multiplatform Images
 - https://docs.docker.com/build/building/multi-platform/
+
+Container images can be built to support multiple CPU architectures, including the
+common options amd64 typically used for Intel-based chips, and arm64 for ARMbased
+machines. A multiplatform image contains a manifest list that references
+architecture-specific machines. You can use Docker to inspect a multiplatform image,
+like this:
+
+docker manifest inspect alpine
+
+The manifest includes a digest identifying the image for each supported platform.
+When pulling an image, the container runtime retrieves the image that matches the
+platform it’s running on.
+The contents of these per-platform images are independent of each other. If your
+organization is running images on a mix of different platforms, you’ll need to make
+sure that the images are scanned for vulnerabilities and insecure configurations for all
+the different platforms, because there’s no guarantee that the content will be the same.
+We’ll discuss image scanning in Chapter 8.
 ---
 
 ## General best practices for images
+
+The instructions for building an image come from a Dockerfile. Each stage of the
+build involves running one of these instructions, and if a bad actor is able to modify
+the Dockerfile, it’s possible for them to take malicious actions, including:
+• Adding malware or cryptomining software into the image
+• Accessing build secrets
+• Enumerating the network topology accessible from the build infrastructure
+• Attacking the build host
+90 | Chapter 7: Supply Chain Security
+It may seem obvious, but the Dockerfile (like any source code) needs appropriate
+access controls to protect against attackers adding malicious steps into the build.
+The contents of the Dockerfile also have a huge bearing on the security of the image
+that the build produces. Let’s turn to some practical steps you can take in the
+Dockerfile to improve image security.
 
 - **Decouple applications**: Each container should have only one concern. Decoupling applications into multiple containers makes it easier to scale horizontally and reuse containers.
 - **Create ephemeral containers**: The image defined by your Dockerfile should generate containers that are as ephemeral as possible. Ephemeral means that the container can be stopped and destroyed, then rebuilt and replaced with an absolute minimum set up and configuration.
@@ -784,9 +904,228 @@ Mature pattern:
 - **Leverage build cache**: When building an image, Docker steps through the instructions in your Dockerfile, executing each in the order specified. For each instruction, Docker checks whether it can reuse the instruction from the build cache. As soon as the cache is broken, Docker executes all the instructions that follow, even if they haven’t changed.
 - **Pin base image versions**: To fully secure your supply chain integrity, you can pin the image version to a specific digest. By pinning your images to a digest, you're guaranteed to always use the same image version, even if a publisher replaces the tag with a new image.
 
+Non-root USER
+The USER instruction in a Dockerfile specifies that the default user identity for
+running containers based on this image isn’t root. In Chapter 11 I’ll cover some
+very good reasons why you should avoid running as root and should specify a
+non-root user in all your Dockerfiles wherever possible.
+
+RUN commands
+Let’s be absolutely clear: a Dockerfile RUN command lets you run any arbitrary
+command. If an attacker can compromise the Dockerfile with the default security
+settings, that attacker can run any code of their choosing. If you have any reason
+not to trust people who can run arbitrary container builds on your system, I can’t
+think of a better way of saying this: you have given them privileges for remote
+code execution. Make sure that privileges to edit Dockerfiles are limited to trusted
+members of your team, and pay close attention to code reviewing these
+changes. You might even want to institute a check or an audit log when any new
+or modified RUN commands are introduced in your Dockerfiles.
+
+Volume mounts
+We often mount host directories into a container through volume mounts. As
+you will see in Chapter 11, it’s important to check that Dockerfiles don’t mount
+sensitive directories like /etc or /bin into a container.
+
+Don’t include sensitive data in the Dockerfile
+In Chapter 6, you saw some mechanisms for safely passing secrets during the
+build process, and we’ll discuss sensitive data and secrets for runtime in more
+detail in Chapter 14. Please understand that including credentials, passwords, or
+other secret data in an image makes it easier for those secrets to be exposed.
+
+Avoid setuid binaries
+As discussed in Chapter 2, it’s a good idea to avoid including executable files with
+the setuid bit, as these could potentially lead to privilege escalation.
+
+Avoid unnecessary code
+The smaller the amount of code in a container, the smaller the attack surface.
+Avoid adding packages, libraries, and executables into an image unless they are
+absolutely necessary. For the same reason, if you can base your image on the
+scratch image or one of the distroless options, you’re likely to have dramatically
+less code—and hence less vulnerable code—in your image.
+
+Include everything that your container needs
+If the previous point exhorted you to exclude superfluous code from a build, this
+point is a corollary: do include everything that your application needs to operate.
+If you allow for the possibility of a container installing additional packages at
+runtime, how will you check that those packages are legitimate? It’s far better to
+do all the installation and validation when the container image is built and create
+an immutable image. See “Immutable Containers” on page 111 for more on why
+this is a good idea.
+
+Avoid dependency confusion
+Here are some routes to consider for avoiding dependency confusion in your
+Dockerfiles:
+• As mentioned already, the base image is specified in the Dockerfile’s FROM
+command. Identify the version you want to use, preferably by hash, but at
+least by version tag rather than relying on latest. Specify the registry explicitly,
+too, to make sure that the system doesn’t fall back to an unexpected
+default location.
+• Only use base images from sources that you trust. Many organizations insist
+that they should be pulled from a private registry to ensure everyone is using
+an approved version. The images might originate from a public registry and
+are scanned and stored in the private registry if the organization’s security
+team considers it safe to use. Another option is to build base images from
+source.
+• Make sure package managers are pulling from the correct registries—for
+example, using --index-url on RUN pip install commands—or using
+set @my-org:registry on RUN npm config.
+• Consider pinning package dependency versions precisely, specifying versions
+in commands like RUN apt-get install.
+• Avoid letting the build automatically or implicitly upgrade dependencies. For
+example, use --require-hashes on RUN pip install.
+• Ideally, all the packages you need should be installed explicitly—for example,
+using the --no-install-recommends flag on RUN apt-get install.
+
+Specifying all dependency versions explicitly ensures you’re using a precisely defined
+set of dependencies, avoiding dependency confusion, but there are some trade-offs.
+Unless you keep the versions updated, you might be missing important security
+updates that would be picked up automatically if you were to specify the versions
+more loosely. On the other hand, if you specify versions too loosely, you could easily
+find “breaking changes” in new versions of packages that are no longer compatible
+with your code. Vulnerability scanning can be used to spot when your image needs an
+important security update, and testing should spot when you encounter a breaking
+Dockerfile Security | 93
+change, but neither of these is 100% perfect. Finding the right balance between automatic
+updates and explicitly defined dependencies is a careful balance
+
+- write about the many supply chain attacks in may 2026 and how to set up pnpm, uv so it chack for dependencies older than X days for exmaple
+
+- https://github.com/hadolint/hadolint
+- https://www.checkov.io/7.Scan%20Examples/Dockerfile.html
+
 ## Generating SBOMs
 
-<!-- ### 6. Scan Early, Scan Late, And Re-Scan
+Container images can contain lots of different software components:
+• As you saw in Chapter 4, a container image includes a filesystem, often based on
+a Linux distribution, containing all the files and directories included in that
+distribution.
+• Distributions typically support a package manager like apt or yum, and the container
+image might have some of these packages installed into it—ideally (but not
+necessarily) only the dependencies that are needed by the application.
+• Depending on the language used, the application itself might be a compiled
+binary, or it might be a series of interpreted scripts.
+• There might well be some language-specific libraries needed—for example, Rust
+crates, Ruby gems, or Node or Python packages.
+• There might be other files—for example, for configuration or data—compiled
+into the image.
+Any of these software components might contain vulnerable code that an attacker can
+exploit.
+Distributions, packages, libraries, and application source code evolve over time.
+Newer versions of any software might contain fixes for vulnerabilities; they could also
+introduce new, unknown vulnerabilities.
+
+These different components are, generally speaking, written by different developers
+and are obtained from different sources. For example, the Linux distribution might
+come from an organization like Alpine or a company like Red Hat. If you pull a base
+image representing, say, a distribution of Red Hat Enterprise Linux, you want to be
+sure that it really came from Red Hat and not from a malicious imposter. Similarly,
+you want confidence that the packages and libraries included in an image come from
+legitimate providers.
+You also need appropriate access controls on your source code repositories to ensure
+that unauthorized users can’t tamper with it or modify what gets built into container
+images.
+Your company or organization might run container images that it builds itself, perhaps
+for your own business-specific applications. It probably also uses container
+images built by a vendor or other third party, for common infrastructure components
+or tools. You might be responsible for building container images that are distributed
+and used by other organizations and want to give those consumers confidence that
+your images are safe to use.
+
+Knowing (or working out) what components are included, and what versions of each
+component, is essential for flagging any known vulnerabilities in a container image.
+
+An SBOM provides a machine-readable inventory of all these different components
+that go into a container image, including information about the versions used. As
+you’ll see in Chapter 8, the SBOM allows automating the process of identifying which
+images need updating when a new vulnerability is discovered. The SBOM also holds
+
+license information about the software components, which can be helpful to meet
+compliance requirements.
+The SBOM can play a critical role in combating vulnerabilities related to dependency
+confusion and package hallucination.
+
+Dependency Confusion
+Dependency confusion can arise by using an unexpected version of a dependency,
+because it wasn’t specified correctly, or by pulling it from the wrong location (the
+wrong registry, package manager, or cache location). This can be avoided by explicitly
+specifying the version and location of the dependency.
+Package Hallucination
+Dependency confusion has become a much bigger problem with the advent of AIgenerated
+code. A 2025 study1 showed that code created by large language models
+(LLMs) has a tendency to hallucinate the names of imported packages, often following
+predictable naming patterns. It’s clearly a problem if generated code doesn’t work
+because it tries to import a package that doesn’t exist. It’s arguably a bigger problem if
+a malicious actor populates those missing packages that are commonly hallucinated
+so that the generated code seems to be working but has incorporated exploit-ridden
+dependencies.
+In container builds, we have to cope with language-specific dependencies referred to
+by source code that developers write, and container image dependencies specified in
+Dockerfiles.
+
+Language-Specific SBOMs
+Source code is often quite nonspecific about the exact versions of dependencies that it
+incorporates (for example, import antigravity in Python2 doesn’t mention a version
+number). Approaches like lock files, Go’s go.sum files, and Python’s requirements.
+txt are all language-specific approaches to using the right versions, but they are
+optional. As you saw in Chapter 6, container image tags only very loosely indicate a
+version. During the build process, all these loose specifications are resolved to some
+specific versions that get used in the construction of the image.
+
+The ideal SBOM records precisely what versions are resolved during the build process.
+This can be done using reproducible build tools like Bazel or the OWASP
+CycloneDX ecosystem, which has language-specific “plug-ins.” For example, in a Java
+project build, you might run the following command during the build:
+mvn org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom
+Or in Go:
+cyclonedx-gomod mod -licenses -json -output sbom.json
+These generate SBOMs including all the resolved dependencies, based on the project’s
+pom.xml file or go.mod file, respectively. CycloneDX plug-ins exist for many other
+languages too.
+If the SBOM isn’t generated at build time, it’s possible to generate one using tools that
+inspect the image and reverse-engineer its contents, but this will likely be less complete
+and accurate, particularly when it comes to language-specific packages. Creating
+an SBOM is essentially the same problem that vulnerability scanners such as trivy
+and syft tackle—in fact, both these scanning tools can generate SBOMs as well as
+vulnerability reports. The best practice is to pair language-specific SBOMs with
+container-level SBOMs for a complete picture. 
+
+The OpenSSF has a Working Group on securing software repositories,
+focusing on recommendations and best practices that can be
+shared among different package manager communities, aiming to
+better enable signing and provenance information for open source
+software.
+
+Generating an SBOM
+As discussed previously, it’s good practice to create an SBOM to enumerate the contents
+of an image. Ideally you’ll have a language-specific SBOM for your application
+code, but you’ll also want to record information about the base image and installed
+OS packages.
+Ideally, the SBOM should be generated at build time, for example, with docker build
+--sbom=true. You can also generate an SBOM for an existing image, and there are several
+tools commonly used for this, including syft and trivy. SBOM information is often
+generated in common formats SPDX or CycloneDX. To generate an SBOM in SPDX format
+for the latest nginx image, I can run this command:
+$ trivy image --format spdx-json nginx
+The output contains information about the packages in the image, licensing information,
+relationships between packages, and data about the tool that generated the
+report. When I ran this tool, the output was more than 8,000 lines long, so I won’t
+include it all here, but just to give you a flavor, here’s an extract (with some lines
+removed or shortened for brevity) describing the bash package that Trivy identified
+within the nginx container:
+
+The SBOM can be used as input into a vulnerability scanner for cross-referencing
+with known vulnerabilities (which we’ll come to in Chapter 8), and your SBOMs can
+be indexed so that you can easily identify components affected by newly disclosed
+vulnerabilities. SBOMs can also be used to check for license compliance. For example,
+if you are building commercial, proprietary software, you may well be concerned
+about including GPL licenses. Similarly, an organization can use the SBOM to
+enforce policies about which components are permitted in their images.
+You almost certainly want to store the SBOM along with the image that it refers to.
+You can either upload it to the registry using OCI artifact support with a reference to
+the image, or you can sign and attach it to the image. Let’s consider how you can sign
+images and other artifacts.
+
+### 6. Scan Early, Scan Late, And Re-Scan
 
 A solid image security process scans:
 
@@ -821,10 +1160,67 @@ Important nuance:
 - SBOM and provenance attestations are most useful when pushed to a registry-backed workflow
 - depending on the image store, local builds may not preserve attestations the way teams expect -->
 
+An SBOM, or Software Bill of Materials, is an inventory of software components. For images, it helps answer:
+
+What did we ship?
+Which packages are inside?
+Which versions are inside?
+Which licenses are inside?
+Which image is affected by this new CVE?
+Which team owns this artifact?
+
+Docker’s documentation describes SBOM attestations as a way to improve software supply-chain transparency by verifying the software artifacts an image contains and the artifacts used to create it. Docker notes that SBOM metadata can include artifact name, version, license, authors, and unique package identifier, and that build-time indexing can detect software used during the build that may not appear in the final image.
+
+Generate an SBOM during build:
+
+docker buildx build \
+  --sbom=true \
+  --provenance=true \
+  -t registry.example.com/course/backend:1.0.0 \
+  --push .
+
+Docker BuildKit produces attestations in the in-toto format and attaches them to images as manifests in the image index. Docker also notes that attestations can be inspected from a registry without pulling the whole image.
+
+Generate an SBOM from an existing image with Trivy:
+
+trivy image \
+  --format cyclonedx \
+  --output backend.cdx.json \
+  registry.example.com/course/backend:1.0.0
+
+Scan an SBOM:
+
+trivy sbom backend.cdx.json
+
+Trivy supports SBOM scanning and can consume SBOM attestations; its documentation shows using Cosign to verify an SBOM attestation and then scanning the resulting SBOM file.
+
+Generate an SBOM with Docker Scout:
+
+docker scout sbom registry.example.com/course/backend:1.0.0
+
+Generate an SBOM with Syft:
+
+syft registry.example.com/course/backend:1.0.0 -o spdx-json=backend.spdx.json
+
+Practical guidance:
+
+Generate SBOMs for every production image.
+Store SBOMs with the image, pipeline run, release record, or artifact repository.
+Prefer standard formats such as SPDX or CycloneDX.
+Treat SBOMs as evidence, not as a complete security guarantee.
+Re-scan SBOMs and images when new vulnerability intelligence appears.
+Use SBOMs during incident response to identify affected services quickly.
+
+OWASP’s Software Component Verification Standard frames software supply-chain risk around identifying controls and best practices that reduce supply-chain risk; it specifically emphasizes supply-chain visibility and incremental adoption of controls
 
 
 ## Image Security Scanning
+
+
+
+
 - Scan images before deployment.
+- https://github.com/cr0hn/dockerscan
 
 <!-- 
 ### 8. Generate Provenance
@@ -848,7 +1244,7 @@ Why it matters:
 - it helps distinguish "we built this" from "we found this in a registry"
 
 
-## Container Image Scanning
+ Container Image Scanning
 
 Scanners are essential. They are not oracles.
 
@@ -867,7 +1263,70 @@ In other words:
 - do not mistake scanner output for complete truth -->
 
 
+Image scanning is necessary, but it is not magic.
 
+A scanner may check for:
+
+operating system package vulnerabilities
+language package vulnerabilities
+secrets
+malware indicators
+weak Dockerfile patterns
+license risk
+misconfigurations
+end-of-life distributions
+base image update recommendations
+
+Example with Trivy:
+
+trivy image --scanners vuln,secret,misconfig image-problem:layer-leak
+
+Example with Docker Scout:
+
+docker scout quickview image-problem:layer-leak
+docker scout cves image-problem:layer-leak
+
+Docker Scout image analysis extracts the SBOM and other image metadata, evaluates it against vulnerability data from security advisories, and can update image security status as new vulnerability data becomes available.
+
+OWASP recommends integrating container scanning tools into CI/CD pipelines and notes that scanners can detect known vulnerabilities, secrets, and misconfigurations in container images. It lists examples including Clair, Grype, Trivy, Docker Scout, Anchore, Snyk, JFrog Xray, and Qualys.
+
+Where to scan
+
+Scan at several points:
+
+Developer workstation
+  -> fast feedback before commit
+
+CI build
+  -> enforce policy before push
+
+Registry
+  -> continuously re-evaluate stored images
+
+Deployment admission
+  -> prevent untrusted or policy-breaking images from running
+
+Runtime inventory
+  -> detect running vulnerable images after new CVEs appear
+
+A mature image pipeline does not scan once and forget. Yesterday’s clean image may become today’s vulnerable image because new vulnerabilities are discovered after the image was built.
+
+What not to assume from scanner output
+
+Do not teach students that scanner output is the same as security truth.
+
+Important limitations:
+
+A low CVE count does not mean the image is safe.
+A high CVE count does not mean all issues are exploitable.
+“Unfixed” does not mean safe; it means no vendor fix is available yet.
+Vulnerability severity may differ between distro advisories and public databases.
+Static binaries and vendored dependencies can be hard to identify.
+Language package detection depends on files and metadata present in the image.
+Secret detection is heuristic and pattern-based.
+Malware and intentional backdoors are not fully solved by CVE scanning.
+Distroless images may reduce findings, but they can still contain vulnerable application code.
+Scanners can miss custom-compiled libraries or unusual package layouts.
 
 
 

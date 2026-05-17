@@ -1,5 +1,14 @@
 # Container Registries And Supply Chain Attacks
 
+
+- Supply Chain Levels for Software Artifacts (SLSA) framework
+- signing images and software artifacts and SBOMs using sigstore
+
+
+
+
+
+
 Container registries look simple.
 
 Push image.
