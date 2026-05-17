@@ -465,12 +465,13 @@ To mitigate the security risks of privileged build environments, the industry ha
 | Alternative Builder | Description |
 | ------------ | ----------- | 
 | **Rootless Docker** | Runs the Docker daemon (`dockerd`) as a non-root user. This is generally available but requires manual opt-in. |
+| **BuildKit rootless mode** | Allows the [BuildKit daemon](https://github.com/moby/buildkit) (`buildkitd`) to [run as a non-root user](https://crazymax.dev/buildkit/user-guides/rootless-mode/). This reduces the risk of giving the build process broad host privileges while still keeping the advanced BuildKit features such as efficient caching, concurrent build execution, and flexible outputs.
 | **BuildKit Container Driver** | Allows running builds seamlessly within an isolated container, separating the build execution from the host operating system. |
 | **Podman & Buildah** | Red Hat's daemonless alternatives. `buildah` is specifically engineered for building OCI images without requiring a background daemon or root privileges. |
 | **Bazel & Nix** | Advanced build systems that focus on highly deterministic, reproducible builds, guaranteeing that the exact same source code will always produce the exact same cryptographic image hash. |
 | **ko & jib** | Language-specific tools (`ko` for Go, `jib` for Java) that compile code and assemble container images directly, without needing Docker installed at all. |
 
-> [Example](https://docs.gitlab.com/ci/docker/using_buildkit/#build-images-in-rootless-mode) from Gitlab on how to use BuildKit in a rootless mode.
+> [Example](https://docs.gitlab.com/ci/docker/using_buildkit/#build-images-in-rootless-mode) from GitLab on how to use BuildKit in rootless mode. [Another example shows](https://candrews.integralblue.com/2025/03/building-docker-images-without-root-or-privilege-escalation/) how building Docker images becomes difficult when both root access and privilege escalation are disallowed.
 
 Whether executed locally or automated in a pipeline, treating the build execution environment as a heavily scrutinized security boundary is just as important as securing the final container itself.
 
@@ -493,14 +494,9 @@ https://medium.com/microscaling-systems/spot-the-docker-difference-9f99adcc4aaf
 
 
 
-
-
-
-
-
 ## The Build Context: A Hidden Security Boundary
 
-[The build context](https://docs.docker.com/build/concepts/context/) is the set of files that your build can access. The positional argument that you pass to the build command specifies the context that you want to use for the build.
+[The build context](https://docs.docker.com/build/concepts/context/) is the set of files that the build can access. Docker’s build documentation states that the positional argument passed to docker build specifies the build context, and build instructions such as `COPY` and `ADD` can reference files and directories inside that context. Filesystem contexts are processed recursively, meaning that local directories include subdirectories.
 
 Most teams diligently review their Dockerfiles. Far fewer teams review their build context. This is a critical security oversight. When you run `docker build .`, the `.` does not mean "only build the files explicitly mentioned in the Dockerfile." It dictates that the builder has access to a build context rooted at the current directory, including all subdirectories.
 
@@ -511,6 +507,30 @@ If you are not careful, highly sensitive files can be shipped to the builder or 
 - `npm` tokens or `pip.conf` files
 - Test databases, debug logs, or customer samples
 
+During builds, Docker often displays a line like this:
+```
+=> [internal] load build context
+=> => transferring context: 138.4MB
+```
+
+A large context is not automatically insecure, but it is a signal worth investigating. For a tiny Python service, a 300 MB context probably means the build is sending unnecessary files to the builder.
+
+Before approving a Dockerfile or build pipeline, check:
+
+| Question     | Why It Matters          |
+| --------------- | ------------- |
+| What directory is passed as the build context?          | Determines what the builder can access                   |
+| Is the context root too broad?                          | Building from repository root may expose unrelated files |
+| Is `.dockerignore` present?                             | Without it, everything under the context can be sent     |
+| Is `.dockerignore` deny-list or allow-list based?       | Allow-list is safer for sensitive services               |
+| Is `COPY . .` used?                                     | Broad copy is the most common leakage pattern            |
+| Are secrets excluded?                                   | `.env`, keys, credentials, package tokens                |
+| Is `.git/` excluded?                                    | Source history may contain deleted secrets               |
+| Are tests and local data excluded from runtime builds?  | Reduces image size and accidental data exposure          |
+| Are Dockerfile-specific ignore files used where needed? | Different builds often need different file sets          |
+| Is the context size reasonable?                         | Large context often indicates hidden baggage             |
+| Is a remote context pinned or trusted?                  | Remote build inputs are supply-chain inputs              |
+
 
 ## Defending the Context with `.dockerignore`
 
@@ -518,7 +538,7 @@ You can use a `.dockerignore` file to exclude files or directories from the buil
 
 When you run a build command, the build client looks for a file named `.dockerignore` in the root directory of the context. If this file exists, the files and directories that match patterns in the files are removed from the build context before it's sent to the builder.
 
-Use a `.dockerignore` file aggressively to filter what the builder is allowed to see. While you can try to maintain a blacklist of specific sensitive files, an allow-list approach is far stricter and more secure:
+Use a `.dockerignore` file aggressively to filter what the builder is allowed to see. While you can try to maintain a blacklist of specific sensitive files, an **allow-list approach is far stricter and more secure**:
 ```plaintext
 # .dockerignore
 
@@ -679,6 +699,8 @@ Smaller images are usually easier to secure because they have fewer packages, fe
 - Can we pin it by digest?
 - Can our scanners correctly identify its packages?
 - Do we have a plan for rebuilding when the base digest changes?
+
+**[SlimToolkit](https://github.com/slimtoolkit/slim)** is another useful tool to know about when optimizing container images. Instead of changing your Dockerfile or replacing your normal build workflow, Slim can analyze an existing image, observe what the application actually uses at runtime, and generate a smaller optimized image that contains only the necessary files and dependencies. It also provides commands such as `xray` for inspecting image contents, `lint` for checking Dockerfiles, and `debug` for troubleshooting minimized containers. This can significantly reduce image size and attack surface, but the optimized image should always be tested carefully, because dynamic analysis may miss files or code paths that are only used in less common runtime scenarios.
 
 ### Using Docker Hardened Images
 
