@@ -477,22 +477,158 @@ Whether executed locally or automated in a pipeline, treating the build executio
 
 ## Dockerfile: Build Instructions
 
-Docker builds images by reading the instructions from a Dockerfile. A Dockerfile is a text file containing instructions for building your source code. The Dockerfile instruction syntax is defined by the specification reference in the [Dockerfile reference](https://docs.docker.com/reference/dockerfile/).
+Docker builds images by reading instructions from a Dockerfile. The Dockerfile is a text file that describes how to assemble an image, and [Docker’s own reference](https://docs.docker.com/reference/dockerfile/) defines the supported instructions such as `FROM`, `RUN`, `COPY`, `ADD`, `ENV`, `ARG`, `USER`, `ENTRYPOINT`, `CMD`, `WORKDIR`, `EXPOSE`, `LABEL`, `HEALTHCHECK`, and others. Docker executes Dockerfile instructions in order, and the Dockerfile must begin with a FROM instruction, except for parser directives, comments, or globally scoped ARG instructions that may appear before it.
 
-Dockerfiles are crucial inputs for image builds and can facilitate automated, multi-layer image builds based on your unique configurations. Dockerfiles can start simple and grow with your needs to support more complex scenarios.
+The default filename is Dockerfile, without a file extension. Using the default name allows the common build form:
+```bash
+sudo docker build -t course/backend:1.0 .
+```
 
-The default filename to use for a Dockerfile is `Dockerfile`, without a file extension. Using the default name allows you to run the `docker build` command without having to specify additional command flags.
+Some projects use multiple Dockerfiles for different purposes:
+```bash
+Dockerfile
+build.Dockerfile
+test.Dockerfile
+lint.Dockerfile
+runtime.Dockerfile
+```
 
-Some projects may need distinct Dockerfiles for specific purposes. A common convention is to name these `<something>.Dockerfile`. You can specify the Dockerfile filename using the `--file` flag for the docker `build command`.
+In that case, specify the file explicitly:
+```bash
+sudo docker build -f build.Dockerfile -t course/backend:build .
+sudo docker build --file runtime.Dockerfile -t course/backend:runtime .
+```
 
+### Instructions That Create Filesystem Layers
 
-Regardless of which tool you use, the vast majority of container image builds are
-defined through a Dockerfile. The Dockerfile gives a series of instructions, each of
-which results in either a filesystem layer or a change to the image configuration.
+Some **Dockerfile instructions modify the image filesystem and therefore create new filesystem content in the image**. The most important are:
+| Instruction | What It Does                                                                                           | Security Meaning                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `FROM`      | Starts a new build stage from a base image                                                             | Inherits all packages, files, users, labels, and defaults from the base image                         |
+| `RUN`       | Executes commands during the build                                                                     | Creates a new layer; can install packages, download files, compile code, or accidentally leak secrets |
+| `COPY`      | Copies files from the build context, another stage, named context, or image                            | Can accidentally copy `.env`, keys, source history, test data, or internal files                      |
+| `ADD`       | Copies files like `COPY`, but also supports extra behavior such as remote sources and archive handling | More implicit behavior; use carefully and prefer `COPY` unless you need `ADD` features                |
 
-https://medium.com/microscaling-systems/spot-the-docker-difference-9f99adcc4aaf
+The `RUN` instruction executes commands and creates a new layer on top of the current image. That layer is then used by the next Dockerfile step. Docker also documents that COPY copies files or directories from the build context, build stage, named context, or image into the filesystem of the image.
 
+A simple example:
+```Dockerfile
+FROM alpine:3.23
 
+RUN apk add --no-cache curl
+COPY app.sh /usr/local/bin/app.sh
+RUN chmod +x /usr/local/bin/app.sh
+```
+
+This creates filesystem changes:
+```
+Base layer: Alpine filesystem
+Layer 2: curl and its dependencies installed
+Layer 3: app.sh copied into /usr/local/bin
+Layer 4: executable bit changed on app.sh
+```
+
+### Instructions That Change Image Configuration
+
+Other instructions do not necessarily add files. Instead, they update the image configuration metadata.
+
+| Instruction   | What It Changes                                          | Security Meaning                                                              |
+| ------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `USER`        | Default user and group for later build steps and runtime | Reveals whether the container runs as root or non-root                        |
+| `ENV`         | Environment variables stored in the image config         | Values persist into the final image and can be inspected                      |
+| `ARG`         | Build-time variable                                      | Useful for build options, unsafe for secrets                                  |
+| `ENTRYPOINT`  | Default executable                                       | Defines what process starts as PID 1                                          |
+| `CMD`         | Default arguments or command                             | Can be overridden at runtime                                                  |
+| `WORKDIR`     | Working directory for later instructions                 | Prevents accidental operations in unexpected directories                      |
+| `EXPOSE`      | Documents intended listening ports                       | Does not publish the port by itself                                           |
+| `LABEL`       | Adds metadata                                            | Useful for ownership, source, version, and audit information                  |
+| `HEALTHCHECK` | Defines how to test container health                     | Can improve operations, but must not leak credentials or hit unsafe endpoints |
+
+The `USER` instruction sets the user name or UID, and optionally the group, used for the rest of the current build stage and at runtime for `ENTRYPOINT` and `CMD`. Docker also recommends setting `WORKDIR` explicitly to avoid unintended operations in unknown directories inherited from the base image.
+
+`ENV` deserves special attention. Environment variables set with `ENV` persist when a container is run from the resulting image, and Docker notes that they can be viewed with `docker inspect` and changed at runtime with `docker run --env`. Docker’s build checks explicitly warn that potentially sensitive data should not be used in `ARG` or `ENV`, because values set this way can persist in the final image. Docker recommends BuildKit secret mounts instead.
+
+Better pattern:
+```Dockerfile
+ # syntax=docker/dockerfile:1.8
+
+FROM alpine:3.23
+
+RUN --mount=type=secret,id=api_token \
+    TOKEN="$(cat /run/secrets/api_token)" && \
+    echo "Using token temporarily during build"
+```
+
+Build:
+```bash
+printf "training-only-token\n" > api-token.txt
+
+sudo docker build \
+  --secret id=api_token,src=api-token.txt \
+  -t secret-mount-demo .
+```
+
+> `ARG` is for build options. `ENV` is for non-sensitive runtime defaults. Neither is for secrets.
+
+`CMD` and `ENTRYPOINT` Dockerfile instructions support two forms:
+```Dockerfile
+CMD echo hello # Shell form
+
+CMD ["echo", "hello"] # Exec form (preferred)
+```
+
+The first is the shell form. It runs through a shell such as `/bin/sh -c`. The second is the exec form. It executes the binary directly. This distinction matters because the process launched by the container usually becomes PID 1 inside the container. Signal handling, argument parsing, environment expansion, and process termination behavior can differ depending on whether a shell is involved.
+
+Prefer exec form for production entrypoints:
+```Dockerfile
+ENTRYPOINT ["python", "app.py"]
+```
+
+The shell form is convenient, but it introduces an extra shell process. That may affect signal forwarding and graceful shutdown. A common pattern is:
+```Dockerfile
+ENTRYPOINT ["python", "app.py"]
+CMD ["--port", "8080"]
+```
+
+This makes the executable stable while allowing default arguments to be overridden at runtime.
+
+### Parser Directives
+
+A Dockerfile can start with parser directives. These are special comments that affect how the Dockerfile is interpreted. Docker documents supported parser directives such as `syntax`, `escape`, and `check`, and notes that parser directives must appear at the top of the Dockerfile before normal comments, empty lines, or instructions.
+
+Example:
+```Dockerfile
+# syntax=docker/dockerfile:1
+
+FROM alpine:3.23
+RUN echo "hello"
+```
+
+The most common directive is syntax, which selects the Dockerfile frontend version. This is important when using modern BuildKit features such as:
+```Dockerfile
+RUN --mount=type=cache,target=/root/.cache/pip ...
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc ...
+RUN --mount=type=ssh ...
+```
+
+Without the correct syntax version, newer Dockerfile features may not work consistently across build environments.
+
+Dockerfile Instruction Security Table:
+| Instruction  | Common Mistake                                       | Security Impact                                | Better Direction                                     |
+| ------------ | ---------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------- |
+| `FROM`       | `FROM latest`                                        | Non-reproducible builds and tag drift          | Use version tags; pin digests for production         |
+| `RUN`        | `curl https://example/install.sh \| sh`              | Executes unverified remote code                | Use trusted package repos, checksums, or signatures  |
+| `RUN`        | Installing compilers and leaving them in final image | Increases attack surface                       | Use multi-stage builds                               |
+| `COPY`       | `COPY . .`                                           | Copies secrets, `.git`, caches, and test data  | Copy only required files                             |
+| `ADD`        | Using remote URLs without verification               | Pulls external content into the build          | Prefer `COPY`; use `ADD --checksum` when appropriate |
+| `ENV`        | Storing tokens or passwords                          | Values persist in final image metadata         | Use runtime secret injection or BuildKit secrets     |
+| `ARG`        | Passing credentials with `--build-arg`               | May appear in metadata, logs, or provenance    | Use `RUN --mount=type=secret`                        |
+| `USER`       | Missing user directive                               | Container runs as root by default              | Create and use a non-root user                       |
+| `WORKDIR`    | Relying on inherited working directory               | Unexpected file placement or command execution | Set it explicitly                                    |
+| `ENTRYPOINT` | Shell form for long-running processes                | Poor signal handling and shutdown behavior     | Prefer exec form                                     |
+| `CMD`        | Multiple `CMD` instructions                          | Only the last one takes effect                 | Use one clear default                                |
+| `EXPOSE`     | Assuming it publishes the port                       | False sense of exposure control                | Use runtime `-p` or Compose/Kubernetes config        |
+| `LABEL`      | No ownership metadata                                | Harder incident response and audit             | Add source, owner, version, revision, license        |
 
 ## The Build Context: A Hidden Security Boundary
 
