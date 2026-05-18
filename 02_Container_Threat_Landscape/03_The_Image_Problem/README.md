@@ -1345,205 +1345,57 @@ Docker BuildKit produces attestations in the in-toto format and attaches them to
 
 ### Generating An SBOM With Trivy
 
-[**Trivy**](https://trivy.dev/docs/latest/guide/supply-chain/sbom/) can generate SBOMs from images and output them in SPDX or CycloneDX formats. [Follow the documentation to install](https://trivy.dev/docs/latest/getting-started/installation/#debianubuntu-official) Trivy, and then run the following command to generate an SBOM for an image:
-```bash
-trivy image --format spdx-json  --output nginx.spdx.json nginx:latest
-```
+[**Trivy**](https://trivy.dev/docs/latest/guide/supply-chain/sbom/) can generate SBOMs from images and output them in SPDX or CycloneDX formats. [Follow the documentation to install](https://trivy.dev/docs/latest/getting-started/installation/#debianubuntu-official) Trivy.
 
+- Generate an SPDX JSON SBOM:
+  ```bash
+  trivy image --format spdx-json  --output nginx.spdx.json nginx:latest
+  ```
+- Generate a CycloneDX SBOM:
+  ```bash
+  trivy image --format cyclonedx --output nginx.cdx.json nginx:latest
+  ```
+- Scan an SBOM later:
+  ```
+  trivy sbom nginx.cdx.json
+  ```
+
+That matters because vulnerabilities are discovered after images are built. A clean scan today does not mean the image will still be clean next month.
 
 ### Generating An SBOM With Syft
 
+[Syft](https://oss.anchore.com/docs/projects/) is another common SBOM generation tool. It can inspect container images, filesystems, archives, and directories and produce SBOMs in formats such as SPDX and CycloneDX.
 
----
-Container images can contain lots of different software components:
-• As you saw in Chapter 4, a container image includes a filesystem, often based on
-a Linux distribution, containing all the files and directories included in that
-distribution.
-• Distributions typically support a package manager like apt or yum, and the container
-image might have some of these packages installed into it—ideally (but not
-necessarily) only the dependencies that are needed by the application.
-• Depending on the language used, the application itself might be a compiled
-binary, or it might be a series of interpreted scripts.
-• There might well be some language-specific libraries needed—for example, Rust
-crates, Ruby gems, or Node or Python packages.
-• There might be other files—for example, for configuration or data—compiled
-into the image.
-Any of these software components might contain vulnerable code that an attacker can
-exploit.
-Distributions, packages, libraries, and application source code evolve over time.
-Newer versions of any software might contain fixes for vulnerabilities; they could also
-introduce new, unknown vulnerabilities.
+Install Syft by following the [official documentation](https://oss.anchore.com/docs/installation/syft/):
+```bash
+curl -sSfL https://get.anchore.io/syft | sudo sh -s -- -b /usr/local/bin
+```
+- Generate SPDX JSON:
+  ```bash
+  syft nginx:latest -o spdx-json=nginx.spdx.json
+  ```
+- Generate CycloneDX JSON:
+  ```bash
+  syft nginx:latest -o cyclonedx-json=nginx.cdx.json
+  ```
+- Generate a table view for quick inspection:
+  ```bash
+  syft nginx:latest -o table
+  ```
 
-These different components are, generally speaking, written by different developers
-and are obtained from different sources. For example, the Linux distribution might
-come from an organization like Alpine or a company like Red Hat. If you pull a base
-image representing, say, a distribution of Red Hat Enterprise Linux, you want to be
-sure that it really came from Red Hat and not from a malicious imposter. Similarly,
-you want confidence that the packages and libraries included in an image come from
-legitimate providers.
-You also need appropriate access controls on your source code repositories to ensure
-that unauthorized users can’t tamper with it or modify what gets built into container
-images.
-Your company or organization might run container images that it builds itself, perhaps
-for your own business-specific applications. It probably also uses container
-images built by a vendor or other third party, for common infrastructure components
-or tools. You might be responsible for building container images that are distributed
-and used by other organizations and want to give those consumers confidence that
-your images are safe to use.
+### SBOMs And VEX
 
-Knowing (or working out) what components are included, and what versions of each
-component, is essential for flagging any known vulnerabilities in a container image.
+An SBOM says what is inside the image. It does not necessarily say whether a vulnerability is exploitable in your specific application. That is where VEX, or Vulnerability Exploitability eXchange, can help. CycloneDX supports VEX as part of its broader BOM ecosystem. This distinction matters because container images often include packages that exist on disk but are not reachable by the running application. However, be careful: “not exploitable” claims need evidence. VEX should not become a way to dismiss findings casually.
 
-An SBOM provides a machine-readable inventory of all these different components
-that go into a container image, including information about the versions used. As
-you’ll see in Chapter 8, the SBOM allows automating the process of identifying which
-images need updating when a new vulnerability is discovered. The SBOM also holds
+[OWASP Dependency-Track](https://dependencytrack.org/) is an example of a continuous SBOM analysis platform that helps organizations identify and reduce software supply-chain risk using SBOMs.
 
-license information about the software components, which can be helpful to meet
-compliance requirements.
-The SBOM can play a critical role in combating vulnerabilities related to dependency
-confusion and package hallucination.
-
-Dependency Confusion
-Dependency confusion can arise by using an unexpected version of a dependency,
-because it wasn’t specified correctly, or by pulling it from the wrong location (the
-wrong registry, package manager, or cache location). This can be avoided by explicitly
-specifying the version and location of the dependency.
-Package Hallucination
-Dependency confusion has become a much bigger problem with the advent of AIgenerated
-code. A 2025 study1 showed that code created by large language models
-(LLMs) has a tendency to hallucinate the names of imported packages, often following
-predictable naming patterns. It’s clearly a problem if generated code doesn’t work
-because it tries to import a package that doesn’t exist. It’s arguably a bigger problem if
-a malicious actor populates those missing packages that are commonly hallucinated
-so that the generated code seems to be working but has incorporated exploit-ridden
-dependencies.
-In container builds, we have to cope with language-specific dependencies referred to
-by source code that developers write, and container image dependencies specified in
-Dockerfiles.
-
-Language-Specific SBOMs
-Source code is often quite nonspecific about the exact versions of dependencies that it
-incorporates (for example, import antigravity in Python2 doesn’t mention a version
-number). Approaches like lock files, Go’s go.sum files, and Python’s requirements.
-txt are all language-specific approaches to using the right versions, but they are
-optional. As you saw in Chapter 6, container image tags only very loosely indicate a
-version. During the build process, all these loose specifications are resolved to some
-specific versions that get used in the construction of the image.
-
-The ideal SBOM records precisely what versions are resolved during the build process.
-This can be done using reproducible build tools like Bazel or the OWASP
-CycloneDX ecosystem, which has language-specific “plug-ins.” For example, in a Java
-project build, you might run the following command during the build:
-mvn org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom
-Or in Go:
-cyclonedx-gomod mod -licenses -json -output sbom.json
-These generate SBOMs including all the resolved dependencies, based on the project’s
-pom.xml file or go.mod file, respectively. CycloneDX plug-ins exist for many other
-languages too.
-If the SBOM isn’t generated at build time, it’s possible to generate one using tools that
-inspect the image and reverse-engineer its contents, but this will likely be less complete
-and accurate, particularly when it comes to language-specific packages. Creating
-an SBOM is essentially the same problem that vulnerability scanners such as trivy
-and syft tackle—in fact, both these scanning tools can generate SBOMs as well as
-vulnerability reports. The best practice is to pair language-specific SBOMs with
-container-level SBOMs for a complete picture. 
-
-The OpenSSF has a Working Group on securing software repositories,
-focusing on recommendations and best practices that can be
-shared among different package manager communities, aiming to
-better enable signing and provenance information for open source
-software.
-
-Generating an SBOM
-As discussed previously, it’s good practice to create an SBOM to enumerate the contents
-of an image. Ideally you’ll have a language-specific SBOM for your application
-code, but you’ll also want to record information about the base image and installed
-OS packages.
-
-
-Ideally, the SBOM should be generated at build time, for example, with docker build
-`--sbom=true`. You can also generate an SBOM for an existing image, and there are several
-tools commonly used for this, including syft and trivy. SBOM information is often
-generated in common formats SPDX or CycloneDX. To generate an SBOM in SPDX format
-for the latest nginx image, I can run this command:
-`$ trivy image --format spdx-json nginx`
-
-The output contains information about the packages in the image, licensing information,
-relationships between packages, and data about the tool that generated the
-report. When I ran this tool, the output was more than 8,000 lines long, so I won’t
-include it all here, but just to give you a flavor, here’s an extract (with some lines
-removed or shortened for brevity) describing the bash package that Trivy identified
-within the nginx container:
-
-The SBOM can be used as input into a vulnerability scanner for cross-referencing
-with known vulnerabilities (which we’ll come to in Chapter 8), and your SBOMs can
-be indexed so that you can easily identify components affected by newly disclosed
-vulnerabilities. SBOMs can also be used to check for license compliance. For example,
-if you are building commercial, proprietary software, you may well be concerned
-about including GPL licenses. Similarly, an organization can use the SBOM to
-enforce policies about which components are permitted in their images.
-You almost certainly want to store the SBOM along with the image that it refers to.
-You can either upload it to the registry using OCI artifact support with a reference to
-the image, or you can sign and attach it to the image. Let’s consider how you can sign
-images and other artifacts.
-
-
-An SBOM, or Software Bill of Materials, is an inventory of software components. For images, it helps answer:
-
-What did we ship?
-Which packages are inside?
-Which versions are inside?
-Which licenses are inside?
-Which image is affected by this new CVE?
-Which team owns this artifact?
-
-Docker’s documentation describes SBOM attestations as a way to improve software supply-chain transparency by verifying the software artifacts an image contains and the artifacts used to create it. Docker notes that SBOM metadata can include artifact name, version, license, authors, and unique package identifier, and that build-time indexing can detect software used during the build that may not appear in the final image.
-
-Generate an SBOM during build:
-
-docker buildx build \
-  --sbom=true \
-  --provenance=true \
-  -t registry.example.com/course/backend:1.0.0 \
-  --push .
-
-Docker BuildKit produces attestations in the in-toto format and attaches them to images as manifests in the image index. Docker also notes that attestations can be inspected from a registry without pulling the whole image.
-
-Generate an SBOM from an existing image with Trivy:
-
-trivy image \
-  --format cyclonedx \
-  --output backend.cdx.json \
-  registry.example.com/course/backend:1.0.0
-
-Scan an SBOM:
-
-trivy sbom backend.cdx.json
-
-Trivy supports SBOM scanning and can consume SBOM attestations; its documentation shows using Cosign to verify an SBOM attestation and then scanning the resulting SBOM file.
-
-Generate an SBOM with Docker Scout:
-
-docker scout sbom registry.example.com/course/backend:1.0.0
-
-Generate an SBOM with Syft:
-
-syft registry.example.com/course/backend:1.0.0 -o spdx-json=backend.spdx.json
-
-Practical guidance:
-
-Generate SBOMs for every production image.
-Store SBOMs with the image, pipeline run, release record, or artifact repository.
-Prefer standard formats such as SPDX or CycloneDX.
-Treat SBOMs as evidence, not as a complete security guarantee.
-Re-scan SBOMs and images when new vulnerability intelligence appears.
-Use SBOMs during incident response to identify affected services quickly.
-
-OWASP’s Software Component Verification Standard frames software supply-chain risk around identifying controls and best practices that reduce supply-chain risk; it specifically emphasizes supply-chain visibility and incremental adoption of controls
-
-
-
+A good pattern:
+- Build image
+- Generate SBOM
+- Attach SBOM to image digest
+- Push image and SBOM to registry
+- Index SBOM in vulnerability management platform
+- Re-scan SBOM when new vulnerability data appears
 
 ## Image Security Scanning
 
