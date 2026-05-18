@@ -1240,6 +1240,8 @@ RUN pip install \
     -r requirements.txt
 ```
 
+> **Package Hallucination**: Dependency confusion becomes more concerning when AI-generated code enters the workflow. Code-generating models may invent plausible package names that do not exist. If attackers notice that a model repeatedly suggests the same nonexistent package name, they can publish a malicious package under that name and wait for developers or CI systems to install it. [A research paper on package hallucinations](https://arxiv.org/pdf/2406.10279) generated 576,000 code samples across Python and JavaScript and found many hallucinated package names, including large numbers of unique nonexistent package names. The authors describe this as a software supply-chain risk because attackers can publish malicious packages under hallucinated names.
+
 ### Add dependency cooldowns for package freshness risk
 
 In 2026, package ecosystems saw a sharp increase in supply-chain attacks that targeted developer and CI/CD environments. The Axios incident showed a malicious npm dependency delivering platform-specific RAT payloads during installation, and Microsoft specifically noted that normal application behavior might remain unchanged while malicious activity happens during npm install or update.
@@ -1259,13 +1261,100 @@ This policy is useful when the build resolves dependencies from public package i
 ### Scan Dockerfiles before building
 
 Image scanning happens after an image exists. Dockerfile scanning happens before the image is built. You want both.
-Two useful tools for Dockerfile review are [**Hadolint**](https://github.com/hadolint/hadolint?utm_source=chatgpt.com) and [**Checkov**](https://www.checkov.io/1.Welcome/Quick%20Start.html).
-
+Two useful tools for Dockerfile review are [**Hadolint**](https://github.com/hadolint/hadolint) and [**Checkov**](https://www.checkov.io/1.Welcome/Quick%20Start.html).
 
 ## Generating SBOMs
 
-https://chatgpt.com/g/g-p-6a05bbc989148191b3eace3ab72144bf-pesco-container-security/c/6a05c1c3-758c-8326-a312-ea39905455c6
+A container image can contain many different software components, and those components often come from many different places. A simple-looking application image may include:
+- a Linux distribution filesystem from the base image,
+- OS packages installed with `apt`, `apk`, `dnf`, `yum`, or another package manager,
+- a language runtime such as Python, Node.js, Java, Go, Ruby, or Rust,
+- application source code or compiled binaries,
+- language-specific dependencies such as npm packages, Python wheels, Ruby gems, Rust crates, Maven artifacts, or Go modules,
+- configuration files, static assets, certificates, or data files,
+- metadata inherited from the base image or produced during the build.
 
+Any one of these components might contain vulnerable code. Newer versions may fix known vulnerabilities, but they may also introduce new vulnerabilities or malicious behavior. This is the central problem SBOMs try to make manageable: before you can decide whether an image is affected by a vulnerability, you need to know what is inside it.
+
+An **SBOM, or Software Bill of Materials, is a machine-readable inventory of software components**. For container images, an SBOM helps answer:
+- What did we ship?
+- Which packages are inside?
+- Which versions are inside?
+- Which licenses are inside?
+- Which image is affected by this new CVE?
+- Which team owns this artifact?
+- Which base image did we inherit from?
+- Which package manager ecosystems are represented?
+
+NIST describes an SBOM as a formal record containing details and supply-chain relationships of components used in building software, similar to an ingredient list. NIST also notes that SBOMs improve transparency and help vulnerabilities be identified and remediated faster.
+
+> An image without an SBOM is not automatically unsafe, but it is much harder to reason about during vulnerability management, incident response, and compliance review.
+
+Container images are especially good candidates for SBOM generation because they bundle many layers of software together. A single production image can combine:
+- Debian packages
+- Python packages
+- npm packages
+- Go modules
+- custom application binaries
+- CA certificates
+- shell utilities
+- package manager metadata
+
+Without an SBOM, security teams often have to reverse-engineer this information later by scanning the image. That works, but it is not ideal. The best time to record what went into an image is when the image is built, because that is when the build system knows the source inputs, dependency lockfiles, resolved package versions, base image, build environment, and final artifact.
+
+[Docker’s SBOM attestation documentation](https://docs.docker.com/build/metadata/attestations/sbom/) describes SBOM attestations as a way to improve supply-chain transparency by describing the software artifacts an image contains, as well as artifacts used to create it. It also notes that SBOM metadata can include artifact name, version, license, author, and unique package identifiers.
+
+When a new vulnerability is disclosed, the first question is usually: **Where are we using the affected component?**
+
+An SBOM helps answer this quickly. If a new OpenSSL, glibc, zlib, lodash, requests, Spring, or Go module vulnerability appears, a well-indexed SBOM database can help identify which images contain the affected component and which running services need attention. If an image contains a vulnerable component, **fixing the issue normally means rebuilding and redeploying the image, not patching a running container manually**.
+
+SPDX is an open standard from the Linux Foundation that can represent systems with software components as SBOMs and is also an ISO standard. SPDX is commonly used for license and supply-chain metadata. CycloneDX is an OWASP full-stack Bill of Materials standard that supports SBOMs and other BOM types, including SaaSBOM, HBOM, ML-BOM, CBOM, OBOM, Vulnerability Disclosure Reports, VEX, and attestations. In practical container workflows, the two most common SBOM formats you will see are:
+
+| Format    | Common Use                                                                        |
+| --------- | --------------------------------------------------------------------------------- |
+| SPDX      | License compliance, supply-chain metadata, component inventory                    |
+| CycloneDX | Security-focused BOMs, dependency relationships, vulnerability and risk workflows |
+
+### Generating An SBOM During Docker Build
+
+The preferred approach is to generate SBOM data during the image build and attach it to the image artifact. Example:
+```bash
+# Move to examples/03_sbom_generation
+cd examples/03_sbom_generation
+
+export IMAGE="<REGISTRY>/<USER>/backend:1.0.0"
+
+# Build the image with SBOM and provenance metadata, and push to the registry
+sudo docker buildx build \
+  --sbom=true \
+  --provenance=true \
+  -t "$IMAGE" \
+  --push .
+
+# Check the generated SBOM attestation
+sudo docker buildx imagetools inspect "$IMAGE" --format "{{ json .SBOM.SPDX }}" | jq . > sbom.json
+# Open the file sbom.json to see the SPDX SBOM data, including all the components and their versions that went into the image.
+rm sbom.json
+```
+
+This does two things:
+- `--sbom=true` generates an SBOM attestation.
+- `--provenance=true` generates provenance information about how the image was built.
+
+Docker BuildKit produces attestations in the in-toto format and attaches them to images as manifests in the image index.
+
+### Generating An SBOM With Trivy
+
+[**Trivy**](https://trivy.dev/docs/latest/guide/supply-chain/sbom/) can generate SBOMs from images and output them in SPDX or CycloneDX formats. [Follow the documentation to install](https://trivy.dev/docs/latest/getting-started/installation/#debianubuntu-official) Trivy, and then run the following command to generate an SBOM for an image:
+```bash
+trivy image --format spdx-json  --output nginx.spdx.json nginx:latest
+```
+
+
+### Generating An SBOM With Syft
+
+
+---
 Container images can contain lots of different software components:
 • As you saw in Chapter 4, a container image includes a filesystem, often based on
 a Linux distribution, containing all the files and directories included in that

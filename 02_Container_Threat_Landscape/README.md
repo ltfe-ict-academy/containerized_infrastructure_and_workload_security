@@ -85,6 +85,9 @@
         - Add dependency cooldowns for package freshness risk
         - Scan Dockerfiles before building
     - Generating SBOMs
+        - Generating An SBOM During Docker Build
+        - Generating An SBOM With Trivy
+        - Generating An SBOM With Syft
     - Image Security Scanning
 
 4. [Hands-On: Image Hardening](./04_Hands_on_image_hardening/README.md)
