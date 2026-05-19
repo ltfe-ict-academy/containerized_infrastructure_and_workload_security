@@ -89,6 +89,7 @@
         - Generating An SBOM With Trivy
         - Generating An SBOM With Syft
     - Image Security Scanning
+        - Dockerscan example
 
 4. [Hands-On: Image Hardening](./04_Hands_on_image_hardening/README.md)
 5. [Container Registries And Supply Chain Attacks](./05_Container_registries_and_supply_chain_attacks/README.md)

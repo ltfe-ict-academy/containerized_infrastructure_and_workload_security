@@ -1399,115 +1399,74 @@ A good pattern:
 
 ## Image Security Scanning
 
+After generating an SBOM, the next practical question is: does this image contain known risks?
 
+Image security scanning is the process of analyzing a container image for known vulnerabilities, exposed secrets, weak configuration, risky metadata, license concerns, and sometimes malware indicators. A scanner does not “make the image secure,” but it gives the team evidence about what is inside the artifact before it is pushed, deployed, or allowed to run.
 
+At minimum, image scanning should answer:
+- Which vulnerable packages are present?
+- Which vulnerabilities have fixes available?
+- Are there secrets inside the image?
+- Does the image run as root?
+- Is the base image stale?
+- Are there risky Dockerfile or image configuration patterns?
+- Are there license or policy violations?
 
-- Scan images before deployment.
-- https://github.com/cr0hn/dockerscan
+Modern scanners usually inspect both the image filesystem and image metadata. Trivy, for example, scans container image files for vulnerabilities, misconfigurations, secrets, and licenses, with vulnerability and secret scanning enabled by default for container image targets. It can detect OS package vulnerabilities, language-specific package vulnerabilities, non-packaged software, and Kubernetes components.
 
-<!-- 
-### 8. Generate Provenance
+A typical image scanner checks several layers of risk:
+| Scan Area             | What It Detects                    | Example                                |
+| --------------------- | ---------------------------------- | -------------------------------------- |
+| OS packages           | Vulnerable distribution packages   | `openssl`, `glibc`, `curl`, `bash`     |
+| Language dependencies | Vulnerable application libraries   | npm, pip, Maven, RubyGems, Go modules  |
+| Secrets               | Accidentally embedded credentials  | `.env`, private keys, API tokens       |
+| Misconfiguration      | Risky image or Dockerfile defaults | running as root, missing health checks |
+| Licenses              | License compliance concerns        | GPL in proprietary runtime image       |
+| SBOM data             | Component inventory                | SPDX or CycloneDX package lists        |
 
-Provenance answers questions such as:
+The important point is that vulnerabilities are discovered after images are built. An image that had no critical findings yesterday may become vulnerable tomorrow because a new CVE is published. Docker Scout’s image analysis model is a good example of this idea: it extracts SBOM and image metadata, evaluates it against vulnerability advisories, and can update security status later when new vulnerability data becomes available.
 
-- what source produced this image
-- which builder created it
-- what parameters were used
-- whether the artifact matches the claimed build process
+Common Tools:
+| Tool               | Main Use                                                                               |
+| ------------------ | -------------------------------------------------------------------------------------- |
+| Trivy              | Broad image, filesystem, SBOM, secret, misconfiguration, IaC, and Kubernetes scanning  |
+| Grype              | Vulnerability scanning for images, filesystems, and SBOMs                              |
+| Docker Scout       | Docker-native SBOM, vulnerability, and base image recommendation workflow              |
+| Snyk Container     | Commercial image and dependency scanning with developer workflow integration           |
+| Clair              | Registry-oriented vulnerability scanning, often seen in enterprise registry ecosystems |
+| Anchore Enterprise | Enterprise policy, SBOM, and vulnerability management around images                    |
+| Dockerscan         | Docker image/container security analysis and lab-friendly inspection                   |
 
-Example:
+Practical Best Practices:
+| Practice                             | Why It Matters                                                 |
+| ------------------------------------ | -------------------------------------------------------------- |
+| Scan every production image          | Prevents obvious vulnerable artifacts from reaching deployment |
+| Scan for vulnerabilities and secrets | CVEs are not the only image risk                               |
+| Generate machine-readable output     | CI/CD systems need structured results                          |
+| Fail on clear policy violations      | Scanning without enforcement becomes advisory only             |
+| Re-scan after release                | New CVEs appear after images are built                         |
+| Scan SBOMs as well as images         | Enables fast re-evaluation without always pulling images       |
+| Compare multiple tools periodically  | Helps reveal scanner blind spots                               |
+| Keep scanner databases updated       | Old vulnerability databases create false confidence            |
+| Track exceptions                     | Risk acceptance should be explicit and time-bound              |
+| Prioritize by runtime context        | Not all findings carry the same operational risk               |
 
+### Dockerscan example
+
+[Dockerscan](https://github.com/cr0hn/dockerscan) is a Docker security analysis tool by Daniel García, also known as cr0hn. The current DockerScan v2.0 project describes itself as a Go-based security scanner for Docker containers and images, combining multiple scanning techniques based on research, CIS Benchmark, NIST SP 800-190, and real-world attack patterns.
+
+Dockerscan is useful to mention in training because it focuses not only on package CVEs but also on broader Docker security analysis. The project page describes capabilities such as scanning Docker images for vulnerabilities, analyzing container configuration, detecting hardcoded secrets, and identifying security issues in real time.
+
+Typical usage will depend on the version installed, but conceptually:
 ```bash
-docker buildx build --provenance -t registry.example.com/course/backend:1.0.0 --push .
+# Linux installation example - https://github.com/cr0hn/dockerscan?utm_source=chatgpt.com#-installation
+curl -L https://github.com/cr0hn/dockerscan/releases/latest/download/dockerscan-linux-amd64 -o dockerscan
+chmod +x dockerscan
+sudo mv dockerscan /usr/local/bin/
+
+sudo dockerscan update-db
+
+sudo dockerscan nginx:latest
 ```
 
-Why it matters:
-
-- provenance makes policy and trust decisions more defensible
-- it helps distinguish "we built this" from "we found this in a registry"
-
-
- Container Image Scanning
-
-Scanners are essential. They are not oracles.
-
-Keep these rules in mind:
-
-- CVE count is not exploitability
-- severity may differ between vendor advisories and public databases
-- third-party package sources can create false positives or false negatives
-- "unfixed" does not mean "safe to ignore"; it means no vendor patch is available yet
-- a secret scanner missing a value does not prove the artifact contains no sensitive data
-- malware, logic bombs, or intentionally hostile code are not solved by CVE scanning alone
-
-In other words:
-
-- use scanners as evidence
-- do not mistake scanner output for complete truth -->
-
-
-Image scanning is necessary, but it is not magic.
-
-A scanner may check for:
-
-operating system package vulnerabilities
-language package vulnerabilities
-secrets
-malware indicators
-weak Dockerfile patterns
-license risk
-misconfigurations
-end-of-life distributions
-base image update recommendations
-
-Example with Trivy:
-
-trivy image --scanners vuln,secret,misconfig image-problem:layer-leak
-
-Example with Docker Scout:
-
-docker scout quickview image-problem:layer-leak
-docker scout cves image-problem:layer-leak
-
-Docker Scout image analysis extracts the SBOM and other image metadata, evaluates it against vulnerability data from security advisories, and can update image security status as new vulnerability data becomes available.
-
-OWASP recommends integrating container scanning tools into CI/CD pipelines and notes that scanners can detect known vulnerabilities, secrets, and misconfigurations in container images. It lists examples including Clair, Grype, Trivy, Docker Scout, Anchore, Snyk, JFrog Xray, and Qualys.
-
-Where to scan
-
-Scan at several points:
-
-Developer workstation
-  -> fast feedback before commit
-
-CI build
-  -> enforce policy before push
-
-Registry
-  -> continuously re-evaluate stored images
-
-Deployment admission
-  -> prevent untrusted or policy-breaking images from running
-
-Runtime inventory
-  -> detect running vulnerable images after new CVEs appear
-
-A mature image pipeline does not scan once and forget. Yesterday’s clean image may become today’s vulnerable image because new vulnerabilities are discovered after the image was built.
-
-What not to assume from scanner output
-
-Do not teach students that scanner output is the same as security truth.
-
-Important limitations:
-
-A low CVE count does not mean the image is safe.
-A high CVE count does not mean all issues are exploitable.
-“Unfixed” does not mean safe; it means no vendor fix is available yet.
-Vulnerability severity may differ between distro advisories and public databases.
-Static binaries and vendored dependencies can be hard to identify.
-Language package detection depends on files and metadata present in the image.
-Secret detection is heuristic and pattern-based.
-Malware and intentional backdoors are not fully solved by CVE scanning.
-Distroless images may reduce findings, but they can still contain vulnerable application code.
-Scanners can miss custom-compiled libraries or unusual package layouts.
-
+Do not build a production gate around only one tool. Different scanners use different databases, package detection logic, severity models, and output formats.
