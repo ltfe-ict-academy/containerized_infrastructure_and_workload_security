@@ -179,16 +179,20 @@ This first version does many things that are not acceptable in production:
 - includes a search route that is simple enough to inspect and later harden
 
 ### Run the application
+- **Move to the project directory**:
+    ```bash
+    cd example_app
+    ```
 - **Build And Start The Stack**
     ```bash
     sudo docker compose up --build
     ```
 
 - **Open The Application**
-    - frontend: <http://localhost:3000>
-    - backend health: <http://localhost:8000/api/health>
-    - PostgreSQL: `localhost:5432`
-    - Redis: `localhost:6379`
+    - frontend: <http://<SERVER_IP>:3000>
+    - backend health: <http://<SERVER_IP>:8000/api/health>
+    - PostgreSQL: `<SERVER_IP>:5432`
+    - Redis: `<SERVER_IP>:6379`
 
 - **Observe The Containers**. In a second terminal:
     ```bash
@@ -201,33 +205,33 @@ This first version does many things that are not acceptable in production:
 - **Explore The API**
     - Get the health state:
         ```bash
-        curl http://localhost:8000/api/health
+        curl http://<SERVER_IP>:8000/api/health
         ```
     - Fetch all products:
         ```bash
-        curl http://localhost:8000/api/products
+        curl http://<SERVER_IP>:8000/api/products
         ```
     - Run a search:
         ```bash
-        curl "http://localhost:8000/api/products/search?q=red"
+        curl "http://<SERVER_IP>:8000/api/products/search?q=red"
         ```
     - Clear the Redis cache:
         ```bash
-        curl -X POST http://localhost:8000/api/cache/clear
+        curl -X POST http://<SERVER_IP>:8000/api/cache/clear
         ```
     - Inspect the intentionally weak debug route:
         ```bash
-        curl http://localhost:8000/api/admin/debug
+        curl http://<SERVER_IP>:8000/api/admin/debug
         ```
 
 - **Inspect The Running Environment**
     - Check the Compose-created network:
         ```bash
-        docker network ls
+        sudo docker network ls
         ```
     - Inspect the backend container:
         ```bash
-        docker compose exec backend sh
+        sudo docker compose exec backend sh
         ```
     - Inside the container (the process runs as root, credentials are available as plain environment variables):
         ```sh
@@ -239,5 +243,5 @@ This first version does many things that are not acceptable in production:
 - **Teardown**
     - Stop the stack:
         ```bash
-        docker compose down -v
+        sudo docker compose down -v
         ```

@@ -1,19 +1,15 @@
 services:
   frontend:
-    image: course-frontend:day2-insecure
     build:
       context: ./frontend
-      dockerfile: Dockerfile.insecure
     ports:
-      - "3000:80"
+      - "3000:5173"
     depends_on:
       - backend
 
   backend:
-    image: course-backend:day2-insecure
     build:
       context: ./backend
-      dockerfile: Dockerfile.insecure
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
@@ -40,22 +36,6 @@ services:
     image: redis:8
     ports:
       - "6379:6379"
-
-  socket-breakout:
-    image: docker:28-cli
-    profiles: ["escape"]
-    command: ["sh", "-c", "sleep infinity"]
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-
-  host-breakout:
-    image: alpine:3.21
-    profiles: ["escape"]
-    privileged: true
-    pid: host
-    command: ["sh", "-c", "sleep infinity"]
-    volumes:
-      - /:/host
 
 volumes:
   postgres_data:

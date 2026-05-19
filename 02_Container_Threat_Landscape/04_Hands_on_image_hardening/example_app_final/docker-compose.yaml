@@ -2,18 +2,25 @@ services:
   frontend:
     build:
       context: ./frontend
+      args:
+        VITE_API_BASE_URL: "http://localhost:8000/api"
     ports:
-      - "3000:80"
+      - "3000:8080"
     depends_on:
       - backend
 
   backend:
     build:
       context: ./backend
+      args:
+        UV_VERSION: "0.11.15"
+        UV_INDEX_URL: "https://pypi.org/simple"
+        APP_UID: "10001"
+        APP_GID: "10001"
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
-      ENABLE_DEBUG_ROUTES: "true"
+      ENABLE_DEBUG_ROUTES: "false"
     ports:
       - "8000:8000"
     depends_on:
@@ -21,7 +28,7 @@ services:
       - redis
 
   db:
-    image: postgres:18
+    image: dhi.io/postgres:18.4-alpine3.23-fips@sha256:94124859b2bd4274083a716df88d6f2a5e86879659499385da01567443d77c64
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -33,7 +40,7 @@ services:
       - ./db/init:/docker-entrypoint-initdb.d:ro
 
   redis:
-    image: redis:8
+    image: dhi.io/redis:8.6.3-debian13@sha256:db21f5e0bf266b9fbd8df9b7aef140785465f5330fdc86662ec960d10118cefe
     ports:
       - "6379:6379"
 
