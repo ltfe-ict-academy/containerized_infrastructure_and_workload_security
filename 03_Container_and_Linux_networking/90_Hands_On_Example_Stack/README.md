@@ -1,5 +1,15 @@
 # Hands-On Example Stack
 
+
+
+
+
+- ### Use host firewall rules carefully; Docker can add its own iptables / nftables rules.
+- Use internal: true for networks that should not have external connectivity.
+- Publish only required ports.
+- Bind host ports to 127.0.0.1 when traffic should only be local or behind a reverse proxy.
+
+
 Part 03 takes the cleaner images from Part 02 and fixes the next big problem: network design.
 
 By Day 3 the stack should stop looking like "four containers with ports" and start looking like a service topology:

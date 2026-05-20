@@ -2,10 +2,7 @@
 
 Container hardening is not one setting. It is a collection of choices that reduce privilege, reachability and writable surface. Good hardening does not make exploitation impossible. It makes post-exploitation slower, noisier, and less damaging. In other words, container hardening is mostly the art of saying **no** to unnecessary power.
 
-## Common Mistakes - practical demonstration
-
-These show up constantly:
-
+Common mistakes show up constantly:
 - running everything as root because it is easier
 - using `--privileged` to make problems go away
 - mounting Docker socket into app or CI containers
@@ -15,15 +12,7 @@ These show up constantly:
 - mounting large parts of the host filesystem
 - publishing ports widely and calling the environment "hardened"
 
-If a team does several of these, the environment is only cosmetically hardened.
-
-
-- https://docs.docker.com/dhi/core-concepts/cis/
-- https://www.cavirin.com/blog/26-docker/77-docker-container-security-and-stride.html
-
-## Host and daemon hardening
-
-### Keep the host OS, kernel, Docker Engine, Docker Compose, and container runtime updated
+## Keep the host OS, kernel, Docker Engine, Docker Compose, and container runtime updated
 
 Containers are not virtual machines; they **share the host kernel**. That means an outdated host kernel, Docker Engine, containerd, runc, or Docker Compose can become a direct path from “compromised container” to “compromised host.” This is why OWASP lists “Keep Host and Docker up to date” as Rule #0 in its Docker Security Cheat Sheet. A vulnerable application inside a container is bad, but a vulnerable container runtime is worse because the **runtime is the software enforcing the isolation boundary**. If that boundary has a known flaw, an attacker may be able to escape the container, read or modify host files, abuse the Docker API, cause denial of service, or gain higher privileges on the underlying system.
 
@@ -63,7 +52,7 @@ sudo apt upgrade
 
 A container breakout is rarely caused by “Docker being insecure by default”; more often, it happens when a vulnerable runtime, weak configuration, excessive privileges, or an outdated host gives the attacker a path out. Keeping the host and Docker stack updated removes many known escape and denial-of-service paths before attackers can use them.
 
-### Do not expose the Docker daemon over unauthenticated TCP
+## Do not expose the Docker daemon over unauthenticated TCP
 
 The Docker daemon is one of the most sensitive services on a Docker host because it controls image builds, container creation, volume mounts, networking, and access to host resources. By default, Docker listens on a local Unix socket, usually `/var/run/docker.sock`. Exposing the daemon over TCP, especially with something like `tcp://0.0.0.0:2375`, turns the Docker API into a network-accessible control plane. If that TCP listener is unauthenticated and reachable, anyone who can connect to it can effectively control Docker on that host. OWASP explicitly warns that enabling the TCP Docker daemon socket can expose unauthenticated and unencrypted direct access to the Docker daemon. Docker’s own documentation recommends protecting daemon access and using SSH or TLS when remote access is needed.
 
@@ -128,7 +117,7 @@ If remote administration is required, [prefer SSH-based Docker contexts](https:/
 
 The Docker daemon is not just another API; it is the control interface for the host’s container system. If it is exposed without authentication, the attacker effectively gets a remote root-like management interface. The secure default is Unix socket only. If remote access is needed, use SSH-based Docker contexts. If TCP is unavoidable, use mutual TLS, firewall restrictions, monitoring, and never expose plaintext unauthenticated 2375 to a network.
 
-### Do not mount `/var/run/docker.sock` into application containers
+## Do not mount `/var/run/docker.sock` into application containers
 
 Mounting `/var/run/docker.sock` into a container gives that container access to the Docker daemon API on the host. This is extremely dangerous because the Docker daemon controls container creation, volume mounting, networking, images, and many host-level operations. OWASP’s Docker Security Cheat Sheet is very direct about this: the Docker socket is the primary entry point for the Docker API, it is owned by root, and giving access to it is equivalent to giving unrestricted root access to the host.
 
@@ -174,7 +163,7 @@ grep -R "docker.sock" .
 
 Mounting `/var/run/docker.sock` into a container gives the container the ability to control Docker on the host. If that container is compromised, the attacker can often create a new container with the host filesystem mounted and take over the host. Avoid this pattern for application containers. Use isolated build systems, rootless builders, dedicated build hosts, or tightly restricted socket proxies only when there is a clear operational need.
 
-### Restrict membership of the docker group; access to Docker is effectively privileged host access
+## Restrict membership of the docker group; access to Docker is effectively privileged host access
 
 On Linux, users normally need root privileges to interact with the Docker daemon through `/var/run/docker.sock`. To make Docker easier to use, [many installations allow users to run Docker without sudo](https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user) by adding them to the docker group. This is convenient, but it is also a major security decision. Docker’s own documentation warns that the docker group grants root-level privileges to the user. In other words, being in the docker group should be treated almost the same as being allowed to run unrestricted sudo.
 
@@ -221,13 +210,180 @@ If developers need Docker on their laptops, that is a different risk model from 
 
 Membership in the docker group is not just “permission to run containers.” It is permission to control a root-owned daemon that can mount host filesystems and start powerful containers. Restrict the group to trusted administrators only, audit it regularly, remove stale users, avoid adding CI or application accounts casually, and treat Docker group membership with the same seriousness as unrestricted sudo.
 
-### Consider Docker rootless mode or userns-remap for additional isolation.
 
-Docker normally depends on a privileged daemon and Linux kernel isolation features. That means container security is partly about what happens inside the container, but also about how container users map back to the host. 
+## Consider Docker rootless mode
 
-Many people assume: “root inside the container is isolated, so it does not matter.” In practice, it does matter. If a container breakout, unsafe bind mount, runtime flaw, or misconfiguration lets container root interact with the host, container UID 0 may become a very powerful attacker. 
+Running a container as a non-root user is good practice, but it is not the same thing as running the container engine in rootless mode.
 
-**User namespaces reduce that risk by mapping container users to less-privileged host users.** [Docker documents `userns-remap`](https://docs.docker.com/engine/security/userns-remap/) as a way to isolate containers with a user namespace, and **Docker rootless mode** goes further by running both the Docker daemon and containers without root privileges. [Docker’s rootless documentation](https://docs.docker.com/engine/security/rootless/) explains the difference clearly: with `userns-remap`, the daemon still runs as root; with rootless mode, both the daemon and containers run without root privileges.
+This distinction matters. In a normal Docker installation, the Docker daemon runs as root. Even when a container process is configured with USER appuser or started with docker run --user, the daemon that creates the container, prepares mounts, configures networking, and talks to the runtime may still be a root-owned host service. Docker’s own security documentation warns that the Docker daemon normally requires root privileges unless rootless mode is used, and that only trusted users should control the daemon because Docker can create containers with host filesystem access.
+
+
+
+
+
+Rootless containers refers to the ability for an unprivileged user to create, run and otherwise manage containers. This term also includes the variety of tooling around containers that can also be run as an unprivileged user.
+
+“Unprivileged user” in this context refers to a user who does not have any administrative rights, and is “not in the good graces of the administrator” (in other words, they do not have the ability to ask for more privileges to be granted to them, or for software packages to be installed).
+
+Pros:
+
+Can mitigate potential container-breakout vulnerabilities (Not a panacea, of course)
+Friendly to shared machines, especially in HPC environments
+Cons:
+
+Complexity
+
+https://rootlesscontaine.rs/
+
+When we say Rootless Containers, it means running the entire container runtime as well as the containers without the root privileges.
+
+Even when the containers are running as non-root users, when the runtime is still running as root, we don’t call them Rootless Containers.
+
+While we allow using setuid (and/or setcap) binaries for some essential configurations such as newuidmap, when a larger part of the runtime is running with setuid, we don’t call it Rootless Containers. We also don’t call it Rootless Containers when the root user inside a container is mapped to the root user outside the container.
+
+If you worked through the examples in Chapter 4, you’ll know that you need root
+privileges to perform some of the actions that go into creating a container. This is typically
+seen as a no-go in traditional shared machine environments, where multiple
+users can log in to the same machine. An example is a university system, where students
+and staff often have accounts on a shared machine or cluster of machines. System
+administrators quite rightly object to giving root privileges to a user so that they
+can create containers, as that would also allow them to do anything (deliberately or
+accidentally) to any other user’s code or data.
+
+The Rootless Containers initiative drove work including the kernel changes required
+to allow non-root users to run containers. There is now full support for rootless
+mode in Docker and containerd. The podman container implementation has supported
+rootless containers for a long time, and it doesn’t use a privileged daemon process
+in the way that Docker does. This is why the examples at the start of this chapter
+behave differently if you have docker aliased to podman.
+
+Rootless containers make use of the user namespace feature that you saw in “User
+Namespace” on page 47. A normal non-root user ID on the host can be mapped to
+root inside the container. If a container escape occurs somehow, the attacker doesn’t
+automatically have root privileges, so this is a significant security enhancement.
+
+Read more about root inside and outside a podman container in Scott McCarty’s blog
+post.
+However, rootless containers aren’t a panacea. Not every image that runs successfully
+as root in a normal container will behave the same in a rootless container, even
+though it appears to be running as root from the container’s perspective.
+As the documentation for user namespaces states, they isolate not just user and group
+IDs but also other attributes, including capabilities. In other words, you can add or
+drop capabilities for a process in a user namespace, and they apply only inside that
+namespace. So if you add a capability for a rootless container, it applies only in that
+container but not if the container is supposed to have access to other host resources.
+Dan Walsh wrote a blog post with some good examples of this. One of them is about
+binding to low-numbered ports, which, as you saw in the discussion of Nginx earlier,
+requires CAP_NET_BIND_SERVICE. If you run a normal container with
+CAP_NET_BIND_SERVICE (which it would likely have by default if running as root) and
+sharing the host’s network namespace, it could bind to any host port. A rootless container,
+also with CAP_NET_BIND_SERVICE and sharing the host’s network, would not be
+able to bind to low-numbered ports because the capability doesn’t apply outside the
+container’s user namespace.
+
+By and large, the namespacing of capabilities is a good thing, as it allows containerized
+processes to seemingly run as root but without the ability to do things that would
+require capabilities at the system level, like changing the time or rebooting the
+machine. The vast majority of applications that can run in a normal container will
+also run successfully in a rootless container.
+When using rootless containers, although the process appears from the container’s
+perspective to be running as root, from the host’s perspective, it’s a regular user. One
+interesting consequence of this is that the rootless container doesn’t necessarily have
+the same file access permissions as it would have without the user remapping. To get
+around this, the filesystem needs to have support to remap file ownership and group
+ownership within the user namespace. (Not all filesystems have this support at the
+time of writing.)
+Running as root inside a container isn’t exactly a problem in and of itself, as the
+attacker still needs to find a way to escape the container. From time to time, container
+escape vulnerabilities have been found in container runtimes and in the kernel, and
+they probably will continue to be found. But a vulnerability isn’t the only way that
+container escape can be made possible. Later in this chapter, you’ll see ways in which
+risky container configurations can make it easy to escape the container, with no vulnerability
+required. Combine these bad configurations with containers running as
+root, and you have a recipe for disaster.
+With user ID overrides and rootless containers, there are options for avoiding running
+containers as the root user. However you achieve it, you should try to avoid containers
+running as root.
+
+[Rootless mode](https://docs.docker.com/engine/security/rootless/) lets you run the Docker daemon and containers as a non-root user to mitigate potential vulnerabilities in the daemon and the container runtime. This reduces the impact of daemon compromise because the daemon itself is not a root-owned host service.
+
+Why rootless containers?
+Rootless containers are containers that can be created, run, and managed by users without admin rights. Rootless containers have several advantages:
+- They add a new security layer; even if the container engine, runtime, or orchestrator is compromised, the attacker won't gain root privileges on the host.
+- They allow multiple unprivileged users to run containers on the same machine (this is especially advantageous in high-performance computing environments).
+- They allow for isolation inside of nested containers.
+
+Rootless mode executes the Docker daemon and containers inside a user namespace.
+
+To run Docker deamon in rootless mode [follow the instructions in the Docker documentation](https://docs.docker.com/engine/security/rootless/#prerequisites).
+
+Known limitations:
+- **Storage Drivers**: Only `overlay2` (kernel 5.11+), `fuse-overlayfs` (kernel 4.18+ & installed), `btrfs` (kernel 4.18+ or with user_subvol_rm_allowed), and `vfs` are supported.
+- **Resource Management**: cgroup is only supported when using cgroup v2 alongside systemd.
+- **Unsupported Features**: AppArmor, Checkpoint, Overlay networks, and exposing SCTP ports are not supported.
+- **Network & Port Restrictions**: * Special configuration is required to use the ping command.
+- **Special Configuration**: Special configuration is required to expose privileged TCP/UDP ports (< 1024).
+- **Storage Restriction**: NFS mounts cannot be used as the Docker data-root (a general Docker limitation, not exclusive to rootless mode).
+
+Another solution is use [Podman](https://podman.io/). Podman was designed around a daemonless model and strong rootless support.
+
+Why Podman?
+Using Podman makes it easy to find, run, build, share, and deploy applications using Open Container Initiative (OCI)-compatible containers and container images. Podman's advantages are as follows:
+
+It is daemonless; it does not require a daemon, unlike docker.
+It lets you control the layers of the container; sometimes, you want a single layer, and sometimes you need 12 layers.
+It uses the fork/exec model for containers instead of the client/server model.
+It lets you run containers as a non-root user, so you never have to give a user root permission on the host. This obviously differs from the client/server model, where you must open a socket to a privileged daemon running as root to launch a container.
+
+Ubuntu
+The podman package is available in the official repositories for Ubuntu 20.10 and newer.
+
+# Ubuntu 20.10 and newer
+sudo apt-get update
+sudo apt-get -y install podman
+
+- exmaple of buuilding and running a rootless continaer with podman
+
+
+## Strengthening Container Isolation with Seccomp
+
+
+
+
+
+
+
+
+
+
+
+## Strengthening Container Isolation with AppArmor
+## Strengthening Container Isolation with SELinux
+## Other tips for strengthening container isolation
+- Isolate containers with a user namespace: https://docs.docker.com/engine/security/userns-remap
+- gVisor
+- Kata Containers
+- Lightweight/Micro Virtual Machines
+- Unikernels
+
+
+## Run containers as a non-root UID/GID
+
+## Don't allow new privileges
+- Use security_opt: ["no-new-privileges:true"].
+
+## Don't use the `--privileged` flag
+
+## Set the right capabilities
+- Drop all Linux capabilities by default with cap_drop: ["ALL"].
+- Add back only the capabilities actually needed, for example NET_BIND_SERVICE if binding to ports below 1024.
+
+## Do not mount sensitive host paths
+
+## Add resource limits to prevent abuse and denial of service
+
+
+
 
 
 <!-- TO DO HERE https://chatgpt.com/c/69fd9cb9-8fcc-8328-b6aa-fd3734c5c292 -->
@@ -237,31 +393,10 @@ Many people assume: “root inside the container is isolated, so it does not mat
 
 **User namespaces reduce the danger of container root by mapping it to an unprivileged host identity.** userns-remap improves traditional Docker isolation, rootless Docker improves it further by removing the root daemon from the path, and Podman often makes this model easier because rootless, daemonless containers are central to its design. This does not replace other controls like dropping capabilities, read-only filesystems, seccomp, AppArmor/SELinux, and avoidi
 
-### Use host firewall rules carefully; Docker can add its own iptables / nftables rules.
 
-Run periodic benchmarks, for example CIS Docker Benchmark or Docker Bench for Security. CIS publishes secure configuration guidance for Docker, and Docker Bench automates many CIS-style checks. 
 
-- omenimo da je več v delu 3, ampak je povezano tudi s hardeningom
+###  Run periodic benchmarks, for example CIS Docker Benchmark or Docker Bench for Security. CIS publishes secure configuration guidance for Docker, and Docker Bench automates many CIS-style checks. 
 
-## Image and Dockerfile hardening
-- https://docs.docker.com/dhi/core-concepts/hardening/
-- Use a trusted, minimal base image.
-- Pin base image versions; ideally pin by digest in production.
-- Use multi-stage builds so compilers, package managers, and build tools are not copied into the runtime image.
-- Use .dockerignore to keep secrets, Git history, local files, and build noise out of the image context.
-- Never store secrets in ARG, ENV, source code, image layers, or .npmrc / config files.
-- Use BuildKit secrets for private tokens used during build. Docker explicitly warns that build args and environment variables are inappropriate for build secrets because they can persist in the final image.
-- Create or use a dedicated non-root user.
-- Set USER in the Dockerfile.
-- Install only production dependencies.
-- Avoid unnecessary packages such as shells, curl, compilers, package managers, and debugging tools in the final image.
-- Clean package manager caches in the same layer where packages are installed.
-- Use COPY instead of ADD unless you specifically need ADD behavior.
-- Add a HEALTHCHECK where meaningful.
-- Label images with source, version, revision, and maintainer metadata.
-- Scan images in CI before publishing or deploying. Docker Scout can extract SBOM metadata and evaluate images against vulnerability advisories.
-
-- docker hardened images
 
 ## Runtime and Docker Compose hardening
  Run containers as a non-root UID/GID with user: "10001:10001" or similar.
