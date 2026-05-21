@@ -234,7 +234,7 @@ A compromised container is already running code on the host kernel, just inside 
 
 Docker [enables a default seccomp profile](https://github.com/moby/profiles/blob/main/seccomp/default.json) for normal containers. This profile blocks many syscalls that are dangerous or rarely needed in application containers, while still allowing most workloads to run normally. [Docker describes](https://docs.docker.com/engine/security/seccomp) this as a default profile intended to provide broad compatibility while reducing kernel attack surface.
 
-### Hands-On: Checking Seccomp in Docker
+### Hands-On: Using Seccomp in Docker
 
 Run a normal container and inspect its seccomp status:
 ```bash
@@ -288,7 +288,107 @@ Use this approach:
 
 
 ## Strengthening Container Isolation with AppArmor
+
+[AppArmor](https://gitlab.com/apparmor) works at a different layer: it limits what a process is allowed to do with files, capabilities, networking, mounts, and other system resources.
+
+AppArmor, short for Application Armor, is a Linux Security Module. [Docker’s documentation describes](https://docs.docker.com/engine/security/apparmor/) it as a Linux security module where an administrator associates a security profile with a program, and Docker expects an AppArmor policy to be loaded and enforced on systems that use it.
+
+AppArmor profiles describe what a program is allowed to do. For containers, this usually means controlling behavior such as:
+- reading or writing specific filesystem paths;
+- using Linux capabilities;
+- mounting filesystems;
+- accessing sensitive `/proc` or `/sys` locations;
+- using tracing or debugging behavior such as `ptrace`;
+- performing certain network actions.
+
+The important difference from normal Linux file permissions is that AppArmor is a mandatory access control system. Normal Linux permissions are discretionary: if a user owns a file, they may be able to grant access to someone else. **AppArmor policy is enforced by the system and cannot be bypassed just because the process runs as root inside the container.** AppArmor as one of the Linux Security Modules used to strengthen container isolation, alongside seccomp and SELinux.
+
+On systems with AppArmor enabled, [Docker automatically creates](https://github.com/moby/profiles/blob/main/apparmor/template.go) and loads a default profile called `docker-default`. Docker generates this profile in `tmpfs` and loads it into the kernel. This profile applies to containers, not to the Docker daemon itself.
+
+The `docker-default` profile is designed to be moderately protective while still allowing most containers to work normally. Docker applies it unless you override it with `--security-opt`. This is why AppArmor is often invisible during normal Docker use. You may not have written a profile yourself, but Docker may already be applying one.
+
+
+### Hands-On: Using AppArmor in Docker
+
+On a Linux Docker host, check whether AppArmor is active:
+```bash
+sudo aa-status
+# Look for "apparmor module is loaded" and "profiles are in enforce mode"
+```
+
+You can also check the enabled Linux Security Modules:
+```bash
+cat /sys/kernel/security/lsm
+# Look for "apparmor" in the output
+```
+
+See the Profile Applied to a Container:
+```bash
+# Start a simple container:
+sudo docker run -d --name apparmor-demo alpine sleep 300
+
+# Inspect the AppArmor profile:
+sudo docker inspect apparmor-demo --format '{{.AppArmorProfile}}'
+
+# This confirms that Docker applied its default AppArmor profile to the container.
+
+# Clean up:
+sudo docker rm -f apparmor-demo
+```
+
+For comparison, run a container without AppArmor confinement:
+```bash
+sudo docker run --rm \
+  --security-opt apparmor=unconfined \
+  alpine sh -c 'cat /proc/self/attr/current'
+```
+
+This should be avoided in production unless there is a clear, reviewed reason. Disabling AppArmor removes one of the kernel-level restrictions around the container.
+
+The following profile is intentionally simple for demonstration purposes. It allows broad container behavior but denies writing under `/tmp/demo-protected/`. This gives us an easy way to see AppArmor block an operation.
+
+Create the profile:
+```bash
+sudo mkdir -p /etc/apparmor.d/containers
+
+sudo tee /etc/apparmor.d/containers/docker-deny-demo-tmp > /dev/null <<'EOF'
+#include <tunables/global>
+
+profile docker-deny-demo-tmp flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  file,
+  network,
+  capability,
+
+  deny /tmp/demo-protected/** wklx,
+}
+EOF
+
+# Load the profile into the kernel:
+sudo apparmor_parser -r -W /etc/apparmor.d/containers/docker-deny-demo-tmp
+
+# Run the container with --security-opt apparmor=<profile-name>
+sudo docker run --rm \
+  --security-opt apparmor=docker-deny-demo-tmp \
+  alpine sh -c '
+    mkdir -p /tmp/demo-protected
+    echo test > /tmp/allowed-file
+    echo test > /tmp/demo-protected/blocked-file
+  '
+```
+
+The container can still run and write elsewhere, but AppArmor blocks the path protected by the profile.
+
+`aa-status` can be used to check loaded profiles and whether they are in enforce or complain mode. In enforce mode, AppArmor actively blocks actions outside the profile; in complain mode, it logs violations without blocking them.
+
+For most Docker workloads, keep the default `docker-default` AppArmor profile enabled. Do not use `apparmor=unconfined` as a quick workaround.
+
+Custom profiles are useful when a workload is sensitive or has predictable behavior, but they require testing. A profile that is too strict can break the application. A profile that is too broad may provide little extra protection. In practice, start with Docker’s default profile, investigate denied actions carefully, and create custom profiles only where the security benefit justifies the maintenance.
+
 ## Strengthening Container Isolation with SELinux
+
+
 ## Other tips for strengthening container isolation
 - Isolate containers with a user namespace: https://docs.docker.com/engine/security/userns-remap
 - gVisor
