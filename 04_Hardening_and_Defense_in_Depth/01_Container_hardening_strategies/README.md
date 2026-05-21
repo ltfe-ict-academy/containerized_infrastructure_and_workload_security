@@ -215,147 +215,133 @@ Membership in the docker group is not just “permission to run containers.” I
 
 Running a container as a non-root user is good practice, but it is not the same thing as running the container engine in rootless mode.
 
-This distinction matters. In a normal Docker installation, the Docker daemon runs as root. Even when a container process is configured with USER appuser or started with docker run --user, the daemon that creates the container, prepares mounts, configures networking, and talks to the runtime may still be a root-owned host service. Docker’s own security documentation warns that the Docker daemon normally requires root privileges unless rootless mode is used, and that only trusted users should control the daemon because Docker can create containers with host filesystem access.
+This distinction matters. In a normal Docker installation, the Docker daemon runs as root. Even when a container process is configured with `USER appuser` or started with `docker run --user`, the daemon that creates the container, prepares mounts, configures networking, and talks to the runtime may still be a root-owned host service. Docker’s own security documentation warns that the Docker daemon normally requires root privileges unless rootless mode is used, and that only trusted users should control the daemon because Docker can create containers with host filesystem access.
+
+Rootless mode changes that model. **Docker rootless mode runs both the Docker daemon and containers as a non-root user**, using a user namespace so that privileged-looking operations inside the container are mapped to an unprivileged identity on the host. Docker describes rootless mode as a way to mitigate potential vulnerabilities in the daemon and runtime, and explicitly distinguishes it from `userns-remap`, where the daemon itself still runs with root privileges.
+
+The goal is not to make containers magically safe. The goal is to reduce the blast radius. If a container escape or daemon vulnerability occurs, the attacker should not automatically land as root on the host.
+
+A rootless container environment allows an unprivileged user to create, run, build, and manage containers without being granted administrative rights on the host. [The Rootless Containers project](https://rootlesscontaine.rs/) defines this as running the container runtime and the containers without root privileges; it also points out several things that are not rootless containers, including giving a user access to `/var/run/docker.sock`, using `docker run --user`, or using Docker `userns-remap` while the daemon remains rootful.
+
+| Configuration                    | What happens                                                                              | Security meaning                                                 |
+| -------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `USER appuser` in the Dockerfile | Enforces an explicitly created, named user.   | Good image hardening, but the Docker daemon may still be rootful |
+| `docker run --user 10001`        | Forces a hard runtime override using a raw numeric UID.        | Guarantees the process will never run as root, regardless of what the developer did in the Dockerfile.          |
+| Docker rootless mode             | The Docker daemon and containers run inside a user namespace as an unprivileged host user | Reduces the impact of daemon or runtime compromise               |
 
 
+### Why rootless mode matters
 
+In earlier examples, we saw that root inside a container becomes dangerous when the container receives access to host resources: a bind mount, a privileged flag, host networking, extra capabilities, or the Docker socket. Rootless mode does not remove all those risks, but it changes what “root” means from the host’s perspective.
 
+Inside a rootless container, a process may still see itself as UID 0. From inside the container, commands like `id` may show:
+```bash
+uid=0(root) gid=0(root) groups=0(root)
+```
 
-Rootless containers refers to the ability for an unprivileged user to create, run and otherwise manage containers. This term also includes the variety of tooling around containers that can also be run as an unprivileged user.
+From the host’s perspective, that same process is not real host root. It is mapped through a user namespace to the user who started the rootless engine, or to a subordinate UID/GID range assigned to that user. Docker rootless mode requires `newuidmap` and `newgidmap`, and [Docker recommends](https://docs.docker.com/engine/security/rootless/#prerequisites) at least 65,536 subordinate UIDs and GIDs in `/etc/subuid` and `/etc/subgid` for the user running rootless Docker.
 
-“Unprivileged user” in this context refers to a user who does not have any administrative rights, and is “not in the good graces of the administrator” (in other words, they do not have the ability to ask for more privileges to be granted to them, or for software packages to be installed).
+**If the container boundary fails, the attacker should escape into an unprivileged host identity, not directly into host root.**
 
-Pros:
+That is especially valuable on shared systems, developer machines, CI workers, research clusters, and high-performance computing environments where many users may need to run containers but should not receive root-equivalent Docker access.
 
-Can mitigate potential container-breakout vulnerabilities (Not a panacea, of course)
-Friendly to shared machines, especially in HPC environments
-Cons:
+Capabilities granted inside the container are scoped to the user namespace. A rootless container may appear to have capabilities from inside the container, but those capabilities do not automatically apply to the host namespace. For example, binding to low-numbered ports such as 80 or 443 normally requires privilege on the host. In rootless mode, publishing ports below 1024 requires extra configuration, and Docker recommends using a higher port such as 8080 unless privileged ports are explicitly configured.
 
-Complexity
-
-https://rootlesscontaine.rs/
-
-When we say Rootless Containers, it means running the entire container runtime as well as the containers without the root privileges.
-
-Even when the containers are running as non-root users, when the runtime is still running as root, we don’t call them Rootless Containers.
-
-While we allow using setuid (and/or setcap) binaries for some essential configurations such as newuidmap, when a larger part of the runtime is running with setuid, we don’t call it Rootless Containers. We also don’t call it Rootless Containers when the root user inside a container is mapped to the root user outside the container.
-
-If you worked through the examples in Chapter 4, you’ll know that you need root
-privileges to perform some of the actions that go into creating a container. This is typically
-seen as a no-go in traditional shared machine environments, where multiple
-users can log in to the same machine. An example is a university system, where students
-and staff often have accounts on a shared machine or cluster of machines. System
-administrators quite rightly object to giving root privileges to a user so that they
-can create containers, as that would also allow them to do anything (deliberately or
-accidentally) to any other user’s code or data.
-
-The Rootless Containers initiative drove work including the kernel changes required
-to allow non-root users to run containers. There is now full support for rootless
-mode in Docker and containerd. The podman container implementation has supported
-rootless containers for a long time, and it doesn’t use a privileged daemon process
-in the way that Docker does. This is why the examples at the start of this chapter
-behave differently if you have docker aliased to podman.
-
-Rootless containers make use of the user namespace feature that you saw in “User
-Namespace” on page 47. A normal non-root user ID on the host can be mapped to
-root inside the container. If a container escape occurs somehow, the attacker doesn’t
-automatically have root privileges, so this is a significant security enhancement.
-
-Read more about root inside and outside a podman container in Scott McCarty’s blog
-post.
-However, rootless containers aren’t a panacea. Not every image that runs successfully
-as root in a normal container will behave the same in a rootless container, even
-though it appears to be running as root from the container’s perspective.
-As the documentation for user namespaces states, they isolate not just user and group
-IDs but also other attributes, including capabilities. In other words, you can add or
-drop capabilities for a process in a user namespace, and they apply only inside that
-namespace. So if you add a capability for a rootless container, it applies only in that
-container but not if the container is supposed to have access to other host resources.
-Dan Walsh wrote a blog post with some good examples of this. One of them is about
-binding to low-numbered ports, which, as you saw in the discussion of Nginx earlier,
-requires CAP_NET_BIND_SERVICE. If you run a normal container with
-CAP_NET_BIND_SERVICE (which it would likely have by default if running as root) and
-sharing the host’s network namespace, it could bind to any host port. A rootless container,
-also with CAP_NET_BIND_SERVICE and sharing the host’s network, would not be
-able to bind to low-numbered ports because the capability doesn’t apply outside the
-container’s user namespace.
-
-By and large, the namespacing of capabilities is a good thing, as it allows containerized
-processes to seemingly run as root but without the ability to do things that would
-require capabilities at the system level, like changing the time or rebooting the
-machine. The vast majority of applications that can run in a normal container will
-also run successfully in a rootless container.
-When using rootless containers, although the process appears from the container’s
-perspective to be running as root, from the host’s perspective, it’s a regular user. One
-interesting consequence of this is that the rootless container doesn’t necessarily have
-the same file access permissions as it would have without the user remapping. To get
-around this, the filesystem needs to have support to remap file ownership and group
-ownership within the user namespace. (Not all filesystems have this support at the
-time of writing.)
-Running as root inside a container isn’t exactly a problem in and of itself, as the
-attacker still needs to find a way to escape the container. From time to time, container
-escape vulnerabilities have been found in container runtimes and in the kernel, and
-they probably will continue to be found. But a vulnerability isn’t the only way that
-container escape can be made possible. Later in this chapter, you’ll see ways in which
-risky container configurations can make it easy to escape the container, with no vulnerability
-required. Combine these bad configurations with containers running as
-root, and you have a recipe for disaster.
-With user ID overrides and rootless containers, there are options for avoiding running
-containers as the root user. However you achieve it, you should try to avoid containers
-running as root.
-
-[Rootless mode](https://docs.docker.com/engine/security/rootless/) lets you run the Docker daemon and containers as a non-root user to mitigate potential vulnerabilities in the daemon and the container runtime. This reduces the impact of daemon compromise because the daemon itself is not a root-owned host service.
-
-Why rootless containers?
-Rootless containers are containers that can be created, run, and managed by users without admin rights. Rootless containers have several advantages:
-- They add a new security layer; even if the container engine, runtime, or orchestrator is compromised, the attacker won't gain root privileges on the host.
-- They allow multiple unprivileged users to run containers on the same machine (this is especially advantageous in high-performance computing environments).
-- They allow for isolation inside of nested containers.
-
-Rootless mode executes the Docker daemon and containers inside a user namespace.
-
-To run Docker deamon in rootless mode [follow the instructions in the Docker documentation](https://docs.docker.com/engine/security/rootless/#prerequisites).
+Rootless Docker is especially useful when:
+- Developers need local Docker functionality without being placed in the docker group.
+- CI jobs need to build or run containers without giving the runner host root-equivalent daemon access.
+- Multiple users share the same Linux host.
+- The workload does not need low-level host networking, privileged ports, host devices, or unsupported Docker features.
+- The organization wants to reduce the impact of daemon and runtime compromise.
 
 Known limitations:
 - **Storage Drivers**: Only `overlay2` (kernel 5.11+), `fuse-overlayfs` (kernel 4.18+ & installed), `btrfs` (kernel 4.18+ or with user_subvol_rm_allowed), and `vfs` are supported.
 - **Resource Management**: cgroup is only supported when using cgroup v2 alongside systemd.
 - **Unsupported Features**: AppArmor, Checkpoint, Overlay networks, and exposing SCTP ports are not supported.
-- **Network & Port Restrictions**: * Special configuration is required to use the ping command.
+- **Network & Port Restrictions**: Special configuration is required to use the ping command.
 - **Special Configuration**: Special configuration is required to expose privileged TCP/UDP ports (< 1024).
 - **Storage Restriction**: NFS mounts cannot be used as the Docker data-root (a general Docker limitation, not exclusive to rootless mode).
 
-Another solution is use [Podman](https://podman.io/). Podman was designed around a daemonless model and strong rootless support.
+To run Docker deamon in rootless mode [follow the instructions in the Docker documentation](https://docs.docker.com/engine/security/rootless/#prerequisites). Docker rootless mode is useful when teams want Docker compatibility while reducing daemon privilege. Another option is to use [Podman](https://podman.io/).
 
-Why Podman?
-Using Podman makes it easy to find, run, build, share, and deploy applications using Open Container Initiative (OCI)-compatible containers and container images. Podman's advantages are as follows:
+**Podman is a daemonless, open source, Linux-native tool for finding, running, building, sharing, and deploying OCI containers and images.** The Podman documentation describes its CLI as familiar to Docker users and notes that containers can be run by root or by a non-privileged user.
 
-It is daemonless; it does not require a daemon, unlike docker.
-It lets you control the layers of the container; sometimes, you want a single layer, and sometimes you need 12 layers.
-It uses the fork/exec model for containers instead of the client/server model.
-It lets you run containers as a non-root user, so you never have to give a user root permission on the host. This obviously differs from the client/server model, where you must open a socket to a privileged daemon running as root to launch a container.
+The important architectural difference is that **Podman does not require a long-running root-owned daemon in the same way Docker traditionally does**. The Podman man page describes Podman as a daemonless container engine and notes that most Podman commands can be run as a regular user without additional privileges.
 
-Ubuntu
-The podman package is available in the official repositories for Ubuntu 20.10 and newer.
-
-# Ubuntu 20.10 and newer
+[Podman Installation Instructions](https://podman.io/docs/installation):
+```bash
+# For Ubuntu 20.10 and newer
 sudo apt-get update
 sudo apt-get -y install podman
 
-- exmaple of buuilding and running a rootless continaer with podman
+# Run a quick rootless check without sudo:
+podman info | grep -i rootless
+```
+
+Let's create and build a demo app:
+```bash
+# Create a simple Python HTTP server that prints its UID and GID
+cat > app.py <<'EOF'
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import os
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = (
+            f"hello from a rootless container\n"
+            f"uid={os.getuid()} gid={os.getgid()}\n"
+        ).encode()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+EOF
+
+# Create a Dockerfile that runs the app as a non-root user
+cat > Dockerfile <<'EOF'
+FROM python:3.12-alpine
+
+WORKDIR /app
+RUN adduser -D -u 10001 appuser
+COPY --chown=appuser:appuser app.py /app/app.py
+USER appuser
+EXPOSE 8080
+CMD ["python", "/app/app.py"]
+EOF
+
+# Build the image with Podman
+podman build -t rootless-podman-demo:v1 .
+
+podman run --rm -d \
+  --name rootless-podman-demo \
+  -p 8080:8080 \
+  rootless-podman-demo:v1
+
+# Check the container is running
+podman ps -a
+
+# Check the app is responding
+curl http://<SERVER_IP>:8080
+
+# Inspect the container process:
+podman exec rootless-podman-demo id
+podman top rootless-podman-demo user,pid,comm
+
+# Show the user namespace mapping used by Podman:
+podman unshare cat /proc/self/uid_map
+podman unshare cat /proc/self/gid_map
+```
+
+Podman is often a good fit for developer workstations, Linux servers where daemonless operation is preferred, and environments that want strong rootless workflows by default. Docker rootless mode is often a better fit when the organization already depends heavily on Docker tooling, Docker Compose workflows, or Docker-specific integrations.
+
+
 
 
 ## Strengthening Container Isolation with Seccomp
-
-
-
-
-
-
-
-
-
-
 
 ## Strengthening Container Isolation with AppArmor
 ## Strengthening Container Isolation with SELinux
@@ -387,7 +373,7 @@ sudo apt-get -y install podman
 
 
 <!-- TO DO HERE https://chatgpt.com/c/69fd9cb9-8fcc-8328-b6aa-fd3734c5c292 -->
-- https://github.com/containers/podman/blob/main/docs/tutorials/rootless_tutorial.md?utm_source=chatgpt.com
+- https://github.com/containers/podman/blob/main/docs/tutorials/rootless_tutorial.md
 - https://docs.docker.com/engine/security/rootless/
 
 
