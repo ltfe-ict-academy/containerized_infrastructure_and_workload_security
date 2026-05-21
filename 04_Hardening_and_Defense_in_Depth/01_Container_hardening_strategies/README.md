@@ -388,6 +388,24 @@ Custom profiles are useful when a workload is sensitive or has predictable behav
 
 ## Strengthening Container Isolation with SELinux
 
+SELinux, or Security-Enhanced Linux, is another Linux Security Module used to strengthen process isolation. Like AppArmor, it implements mandatory access control, but it works in a different way. AppArmor is commonly described as path-based, while SELinux is label-based.
+
+SELinux is especially common on Red Hat-based distributions such as RHEL, Fedora, and CentOS Stream. In container environments, it is tightly integrated with Red Hat-maintained runtimes such as Podman and CRI-O.
+
+[SELinux controls](https://opensource.com/business/13/11/selinux-policy-guide) what a process can do based on labels. A process runs in an SELinux domain, and files are assigned SELinux types. Policy rules then decide whether a process in one domain can read, write, execute, or otherwise interact with an object of a specific type.
+
+
+Containers share the host kernel, and a container process is still a Linux process on the host. SELinux adds another layer of control around that process.
+
+For example, SELinux can help restrict:
+- which host files a container can access;
+- whether one container can access another container’s files;
+- which mounted volumes are usable by a container;
+- how container processes interact with other labeled system resources.
+
+This is especially valuable when containers use bind mounts. A bind mount deliberately exposes a host directory inside a container. SELinux can prevent the container from using that directory unless the directory has a label that container policy allows.
+
+Keep SELinux enforcing on platforms where it is part of the host security design. On Red Hat-based container hosts, SELinux is one of the strongest default protections around container file access.
 
 ## Other tips for strengthening container isolation
 - Isolate containers with a user namespace: https://docs.docker.com/engine/security/userns-remap

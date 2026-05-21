@@ -7,6 +7,8 @@
 - Restrict membership of the docker group; access to Docker is effectively privileged host access
 - Strengthening Container Isolation with Seccomp
 - Strengthening Container Isolation with AppArmor
+- Strengthening Container Isolation with SELinux
+- Other tips for strengthening container isolation
 - Consider Docker rootless mode
 
 ## [Managing Secrets In Containerized Environments](./02_Managing_Secrets_in_Containerized_Environments/README.md)
