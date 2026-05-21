@@ -5,8 +5,8 @@
 - Do not expose the Docker daemon over unauthenticated TCP
 - Do not mount `/var/run/docker.sock` into application containers
 - Restrict membership of the docker group; access to Docker is effectively privileged host access
-- Consider Docker rootless mode
 - Strengthening Container Isolation with Seccomp
+- Consider Docker rootless mode
 
 ## [Managing Secrets In Containerized Environments](./02_Managing_Secrets_in_Containerized_Environments/README.md)
 

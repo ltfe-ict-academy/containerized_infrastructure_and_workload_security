@@ -211,6 +211,92 @@ If developers need Docker on their laptops, that is a different risk model from 
 Membership in the docker group is not just “permission to run containers.” It is permission to control a root-owned daemon that can mount host filesystems and start powerful containers. Restrict the group to trusted administrators only, audit it regularly, remove stale users, avoid adding CI or application accounts casually, and treat Docker group membership with the same seriousness as unrestricted sudo.
 
 
+## Strengthening Container Isolation with Seccomp
+
+Containers are Linux processes that share the host kernel. Namespaces limit what a container can see, cgroups limit what it can consume, and capabilities limit some privileged actions. Seccomp adds another layer by limiting what system calls a containerized process can make to the kernel.
+
+**A system call is the interface between an application and the kernel.** When a process wants to open a file, create another process, change permissions, mount a filesystem, or interact with networking, it usually asks the kernel through a syscall.
+
+**Seccomp, short for secure computing mode**, restricts which syscalls a process is allowed to use. For containers, this is useful because **many kernel operations should not be available to ordinary application workloads**.
+
+For example, a normal web application container usually has no reason to:
+- change the host clock;
+- load or unload kernel modules;
+- reboot the host;
+- mount filesystems;
+- interact with the kernel keyring;
+- trace other processes;
+- create new namespaces from inside the container.
+
+Blocking these syscalls reduces the attack surface exposed to a compromised container.
+
+A compromised container is already running code on the host kernel, just inside a restricted environment. Seccomp makes that environment narrower. It cannot fix a vulnerable application, and it does not make containers equal to virtual machines, but it can prevent the attacker from using kernel features the application never needed.
+
+Docker [enables a default seccomp profile](https://github.com/moby/profiles/blob/main/seccomp/default.json) for normal containers. This profile blocks many syscalls that are dangerous or rarely needed in application containers, while still allowing most workloads to run normally. [Docker describes](https://docs.docker.com/engine/security/seccomp) this as a default profile intended to provide broad compatibility while reducing kernel attack surface.
+
+### Hands-On: Checking Seccomp in Docker
+
+Run a normal container and inspect its seccomp status:
+```bash
+sudo docker run --rm alpine sh -c 'grep Seccomp /proc/self/status'
+
+# Example output:
+# Seccomp:        2
+# Seccomp_filters:        1
+```
+
+`Seccomp: 2` means the process is running in seccomp filter mode. This confirms that a seccomp profile is active.
+
+The `unshare` command can create new namespaces. A normal application container should not usually create additional namespaces from inside the container.
+
+```bash
+sudo docker run --rm debian:bookworm-slim unshare --map-root-user --user sh -c 'whoami'
+
+# Example output:
+# unshare: unshare failed: Operation not permitted
+```
+
+The container did not fail because Debian is broken. The syscall was blocked by Docker’s default seccomp profile.
+
+Now disable seccomp and try again:
+```bash
+sudo docker run --rm \
+  --security-opt seccomp=unconfined \
+  debian:bookworm-slim \
+  unshare --map-root-user --user sh -c 'whoami'
+```
+
+This demonstrates the value of the default profile. With seccomp enabled, the syscall is denied. With seccomp disabled, the container can perform an operation that should usually not be available to application workloads.
+
+Docker lets you provide a custom profile:
+```bash
+sudo docker run --rm \
+  --security-opt seccomp=/path/to/profile.json \
+  alpine sh
+```
+
+For most containers, keep Docker’s default seccomp profile enabled. It provides a good balance between compatibility and security.
+
+Custom profiles can be useful for sensitive workloads, but they require testing and maintenance. Application developers usually do not call syscalls directly; language runtimes, libraries, and base images do that underneath the application. After an image, runtime, or kernel upgrade, the set of syscalls used by the workload may change. Very strict profiles can therefore break applications unexpectedly
+
+Use this approach:
+1. Start with Docker’s default seccomp profile.
+2. Avoid seccomp=unconfined.
+3. Investigate blocked syscalls instead of disabling the whole profile.
+4. Use custom profiles only where the security benefit justifies the maintenance.
+5. Test profiles before applying them to important workloads.
+
+
+## Strengthening Container Isolation with AppArmor
+## Strengthening Container Isolation with SELinux
+## Other tips for strengthening container isolation
+- Isolate containers with a user namespace: https://docs.docker.com/engine/security/userns-remap
+- gVisor
+- Kata Containers
+- Lightweight/Micro Virtual Machines
+- Unikernels
+
+
 ## Consider Docker rootless mode
 
 Running a container as a non-root user is good practice, but it is not the same thing as running the container engine in rootless mode.
@@ -341,16 +427,7 @@ Podman is often a good fit for developer workstations, Linux servers where daemo
 
 
 
-## Strengthening Container Isolation with Seccomp
 
-## Strengthening Container Isolation with AppArmor
-## Strengthening Container Isolation with SELinux
-## Other tips for strengthening container isolation
-- Isolate containers with a user namespace: https://docs.docker.com/engine/security/userns-remap
-- gVisor
-- Kata Containers
-- Lightweight/Micro Virtual Machines
-- Unikernels
 
 
 ## Run containers as a non-root UID/GID
