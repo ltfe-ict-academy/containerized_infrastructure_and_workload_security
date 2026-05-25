@@ -1,0 +1,112 @@
+slide 3:
+$ sudo apt install docker.io iproute2 iputils-ping tcpdump conntrack nginx curl
+$ sudo usermod -aG docker $USER
+# log out and back in after adding docker group
+
+slide 14:
+$ sudo ip link add br0 type bridge
+$ sudo ip link set br0 up
+$ ip -br link show br0
+
+slide 15:
+$ bridge link
+$ bridge fdb show br br0
+
+slide 22:
+$ sudo ip netns add ns1
+$ sudo ip netns add ns2
+$ sudo ip link add br-demo type bridge
+$ sudo ip link set br-demo up
+$ sudo ip link add veth1-br type veth peer name eth0 netns ns1
+$ sudo ip link add veth2-br type veth peer name eth0 netns ns2
+
+slide 23:
+$ sudo ip link set veth1-br master br-demo
+$ sudo ip link set veth2-br master br-demo
+$ sudo ip link set veth1-br up
+$ sudo ip link set veth2-br up
+$ sudo ip -n ns1 addr add 192.168.50.11/24 dev eth0
+$ sudo ip -n ns2 addr add 192.168.50.12/24 dev eth0
+$ sudo ip -n ns1 link set eth0 up
+$ sudo ip -n ns2 link set eth0 up
+
+slide 24:
+$ sudo ip netns exec ns1 ping -c 2 192.168.50.12
+$ bridge fdb show br br-demo
+$ sudo tcpdump -ni br-demo icmp
+
+slide 28:
+$ docker network ls
+$ docker network inspect bridge
+
+slide 30:
+$ docker run -dit --name c1 alpine sh
+$ docker run -dit --name c2 alpine sh
+$ docker inspect -f "{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}" c2
+$ docker exec c1 ping -c 2 172.17.0.3
+$ docker exec c1 ping -c 1 c2
+
+slide 31:
+$ docker network create app-net
+$ docker run -dit --name web --network app-net nginx:alpine
+$ docker run -dit --name client --network app-net alpine sh
+$ docker network inspect app-net
+
+slide 32:
+$ docker exec client cat /etc/resolv.conf
+$ docker exec client getent hosts web
+$ docker exec client wget -qO- http://web | head
+
+slide 37:
+$ sudo iptables-save | sed -n "/\*nat/,/COMMIT/p"
+$ sudo conntrack -L | grep 172.18.0.3
+
+slide 38:
+$ docker run -d --name web --network app-net -p 8080:80 nginx:alpine
+$ docker ps --format "table {{.Names}}\t{{.Ports}}"
+$ curl -I http://127.0.0.1:8080
+
+slide 40:
+$ sudo iptables-save | grep -E "8080|DNAT|DOCKER"
+
+slide 42:
+$ sudo tcpdump -ni br-xxxx host 8.8.8.8
+$ sudo tcpdump -ni ens160 host 8.8.8.8
+
+slide 47:
+Lab script · Part 1
+# 1) host baseline
+ip -br addr && ip route get 8.8.8.8
+# 2) create app network and containers
+docker network create app-net
+docker run -d --name web --network app-net -p 8080:80 nginx:alpine
+docker run -dit --name client --network app-net alpine sh
+# 3) verify service discovery and HTTP
+docker exec client getent hosts web
+docker exec client wget -qO- http://web | head
+
+slide 48:
+Lab script · Part 2
+# Docker view
+docker network inspect app-net
+docker ps
+# Linux bridge view
+ip link show type bridge
+bridge link
+bridge fdb show
+# NAT/firewall view
+iptables-save | grep -E "8080|DNAT|MASQUERADE|DOCKER"
+conntrack -L | grep 172.18
+# packet evidence
+tcpdump -ni any tcp port 8080
+
+slide 49:
+Cleanup commands
+$ docker rm -f web client c1 c2
+$ docker network rm app-net
+$ sudo ip netns del ns1 2>/dev/null || true
+$ sudo ip netns del ns2 2>/dev/null || true
+$ sudo ip link del br-demo 2>/dev/null || true
+$ sudo ip link del br0 2>/dev/null || true
+$ docker network ls
+$ ip -br link
