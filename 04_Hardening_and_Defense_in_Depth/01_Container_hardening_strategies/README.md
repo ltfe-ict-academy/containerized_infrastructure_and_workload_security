@@ -1118,5 +1118,20 @@ services:
       - no-new-privileges:true
 ```
 
-## Run periodic security benchmarks
-- for example CIS Docker Benchmark or Docker Bench for Security
+## Run Periodic Security Benchmarks
+
+Hardening a container host is not a one-time task. Docker Engine versions change, daemon configuration changes, Compose files evolve, new containers are deployed, and temporary exceptions sometimes become permanent. A secure configuration should therefore be checked periodically, not only when the host is first installed.
+
+Security benchmarks give teams a repeatable way to compare a Docker environment against known good practices. The [CIS Docker Benchmark](https://github.com/dev-sec/cis-docker-benchmark) is a widely used baseline for Docker host, daemon, image, container, network, logging, and runtime configuration. CIS publishes consensus-based secure configuration guidance for Docker, and the Docker project maintains Docker Bench for Security, an open-source script that automates many checks based on the CIS Docker Benchmark.
+
+A benchmark scan will not prove that an environment is secure, but it is useful for finding configuration drift. For example, it can highlight containers running with risky settings, Docker daemon options that should be reviewed, insecure file permissions, missing audit rules, or runtime settings that do not match the organization’s hardening baseline.
+
+A simple way to run [Docker Bench for Security](https://github.com/docker/docker-bench-security) is from a dedicated administration session on the Docker host:
+```bash
+git clone https://github.com/docker/docker-bench-security.git
+cd docker-bench-security
+sudo sh docker-bench-security.sh
+```
+
+The output is usually grouped into checks such as PASS, WARN, and INFO. Treat WARN as something to investigate, not automatically as a vulnerability. Some benchmark recommendations are environment-dependent. For example, a development host, a CI runner, and a production container host may need different decisions around logging, storage, networking, and user access.
+
