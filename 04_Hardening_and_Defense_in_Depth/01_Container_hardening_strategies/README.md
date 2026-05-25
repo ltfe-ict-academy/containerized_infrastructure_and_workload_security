@@ -764,30 +764,112 @@ sudo docker compose -f docker-compose.yml up --build
 
 ## Do not mount sensitive host paths
 
+A container filesystem looks isolated, but volume mounts deliberately cut holes through that isolation. When you mount a host directory into a container, processes inside the container can access that host path according to the permissions you gave them. This is useful for persistent data, configuration files, logs, and development workflows, but it is also one of the easiest ways to turn a compromised container into a host-impacting incident.
+
+A bind mount is not a vulnerability by itself. It is a runtime permission. If the container can write to a host path, and an attacker gets code execution inside that container, the attacker may be able to write to the host path too.
+
+Mounting the host root directory is an obvious bad case: `-v /:/hostroot`
+
+But smaller mounts can be just as dangerous:
+- Mounting `/etc` can expose or modify host configuration, users, groups, service configuration, cron jobs, and authentication-related files: `-v /etc:/host-etc`
+- Mounting `/usr/bin`, `/bin`, or `/usr/sbin` can allow a writable container to place or replace executables used by the host
+- Mounting log directories can allow an attacker to alter evidence after compromise: `-v /var/log:/host-logs`
+- Mounting `/proc`, `/sys`, or `/dev` exposes kernel, process, device, and host interface details that normal application containers should not need.
+- Mounting Docker’s runtime socket or runtime data directories is also high risk: `-v /var/run/docker.sock:/var/run/docker.sock`
+
+**A container should only see the host files it truly needs, and it should only receive the access mode it truly needs.**
 
 
+### Prefer Named Volumes Over Bind Mounts
+
+A named volume is managed by Docker and is usually a safer default for persistent application data than binding arbitrary host paths. Named volumes avoid exposing random host directories into containers, and they make the storage boundary clearer. The bind mount may still be acceptable in local development, but in a hardened runtime configuration, named volumes are usually the cleaner option. They reduce accidental exposure of source code, host configuration, SSH keys, shell history, deployment files, and other files that happen to live near the application directory.
+
+### Make Bind Mounts Read-Only by Default
+
+Sometimes bind mounts are the right tool. For example, an application may need to read a static configuration file from the host, or a reverse proxy may need to read TLS certificates provided by another process.
+
+In those cases, make the bind mount read-only unless the container must write to it:
+```bash
+services:
+  web:
+    image: example/web:1.0
+    volumes:
+      - ./config:/app/config:ro
+```
+
+The `:ro` suffix is small, but important. If the application is compromised, the attacker may still be able to read the mounted files, but they cannot use that mount to modify the host path.
+
+A common development pattern is this:
+```yaml
+volumes:
+  - ./app:/app
+```
+
+That is convenient because code changes on the host immediately appear in the container. It is also dangerous if copied into production. If the web application is compromised and `/app` is writable, the attacker may be able to change source code, templates, startup scripts, dependency files, or application configuration on the host.
 
 
+### Use a Read-Only Root Filesystem
+
+Containers often do not need to write to their root filesystem. The application may need to write temporary files, PID files, sockets, or caches, but it usually should not need to modify `/bin`, `/usr`, `/lib`, `/app`, or other image-provided paths.
+
+In Docker Compose, enable a read-only root filesystem like this:
+```yaml
+services:
+  web:
+    image: example/web:1.0
+    read_only: true
+```
+
+With `read_only: true`, Docker mounts the container’s root filesystem as read-only. This helps enforce the idea that the image is immutable at runtime. If an attacker compromises the application, they have fewer places to drop tools, modify files, replace application code, or persist changes inside the container filesystem.
+
+This does not make the container fully immutable. Writable volumes and tmpfs mounts are still writable. That is exactly why we should define writable locations explicitly.
+
+### Add Explicit Writable `tmpfs` Mounts
+
+Many applications need some writable paths even when the root filesystem is read-only. Common examples include:
+```
+/tmp
+/run
+/var/tmp
+```
+
+Instead of leaving the whole root filesystem writable, add small temporary filesystems only where needed:
+```yaml
+services:
+  web:
+    image: example/web:1.0
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /run:size=16m,mode=755
+```
+
+A `tmpfs` mount is backed by memory and exists only for the lifetime of the container. This makes it useful for temporary runtime files that do not need to persist. This is better than leaving the whole filesystem writable just because one directory needs temporary writes.
+
+### Avoid `devices`: Unless Explicitly Required
+
+Docker can expose host devices to containers. In Compose this is usually done with `devices:`:
+```yaml
+services:
+  worker:
+    image: example/worker:1.0
+    devices:
+      - /dev/something:/dev/something
+```
+
+This should not be used casually. Device access can expose kernel interfaces, hardware, disks, accelerators, serial devices, or other sensitive host resources. Some workloads genuinely need devices, such as GPU workloads, hardware security modules, or specialized networking tools. Most web applications, APIs, workers, and databases do not.
 
 
+| Question                                                   | Safer default                                           |
+| ---------------------------------------------------------- | ------------------------------------------------------- |
+| Does this container need persistent data?                  | Use a named volume.                                     |
+| Does it only need to read a host file or directory?        | Use a bind mount with `:ro`.                            |
+| Does it need temporary writes?                             | Use `tmpfs` for `/tmp`, `/run`, or another narrow path. |
+| Does it need to write to the container image filesystem?   | Usually no; set `read_only: true`.                      |
+| Does it need the Docker socket?                            | Almost always no.                                       |
+| Does it need host `/etc`, `/proc`, `/sys`, `/dev`, or `/`? | No for normal application containers.                   |
+| Does it need a host device?                                | Only if there is a specific hardware requirement.       |
 
-
-
-
-
-
-
-
-
-
-
-
-- Use read_only: true for the container root filesystem.
-- Add explicit writable tmpfs mounts only where the app needs temporary writes, such as /tmp or /run.
-- Avoid host bind mounts where possible; prefer named volumes.
-- Make bind mounts read-only with :ro unless the container must write.
-- Do not mount sensitive host paths like /, /etc, /var/run, /proc, /sys, /dev, or Docker’s data directory.
-- Avoid devices: unless a device is explicitly required.
 
 ## Add resource limits to prevent abuse and denial of service
 - Limit resources: memory, CPU, PIDs, file descriptors, and restart loops.

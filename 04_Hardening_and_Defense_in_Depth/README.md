@@ -13,6 +13,7 @@
 - Don't use the `--privileged` flag
 - Don't allow new privileges
 - Set the right capabilities
+- Do not mount sensitive host paths
 
 ## [Managing Secrets In Containerized Environments](./02_Managing_Secrets_in_Containerized_Environments/README.md)
 
