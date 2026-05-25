@@ -1015,7 +1015,108 @@ This keeps up to three log files of 10 MB each for the container. After that, Do
 
 ## Run containers as a non-root UID/GID
 
-## Use health checks and controlled restart policies
+By default, many container images run their main process as root. In Docker, this can be surprising because the person starting the container may be an ordinary non-root user on the host, but the process inside the container still starts as UID 0. Docker Compose makes this explicit: the `user` field overrides the user used to run the container process; if no user is set by Compose or by the image’s Dockerfile, the default is root.
+
+This matters because containers share the host kernel. A container is isolated by namespaces, cgroups, capabilities, seccomp, AppArmor/SELinux, and runtime configuration, but it is not a separate kernel like a virtual machine. If an attacker compromises a containerized application running as root, they have a much stronger position from which to abuse kernel bugs, runtime bugs, dangerous mounts, writable host paths, Linux capabilities, setuid binaries, or misconfigured Docker access. Docker’s own security documentation notes that user namespaces can map root inside a container to a non-UID-0 user outside the container to reduce breakout risk, but this is available rather than enabled by default.
+
+The simple rule is: **application containers should not run as root unless there is a specific, justified reason.**
+
+Running as root inside a container is risky because it removes an important layer of defense. If the application has a remote code execution vulnerability, command injection bug, malicious plugin, compromised dependency, unsafe upload handler, or SSRF-to-command path, the attacker’s first shell inside the container may be root.
+
+That does not automatically mean the attacker owns the host, but it makes the next step easier. For example, a root process inside the container may be able to:
+- write to files in mounted volumes;
+- modify application code or configuration;
+- install tools if the filesystem is writable;
+- abuse setuid binaries;
+- bind to privileged ports depending on runtime settings;
+- inspect more local files than a non-root user could;
+- take advantage of excessive Linux capabilities;
+- exploit kernel or runtime vulnerabilities from a more privileged starting point.
+
+A non-root container does not make exploitation impossible, but it changes the attacker’s starting point. Instead of immediately having UID 0 inside the container, the attacker lands as a constrained user such as UID 10001. That user should only be able to read and write the application paths intentionally assigned to it.
+
+This shows that a non-root host user can start a container whose process runs as root.
+```bash
+whoami
+sudo docker run -it alpine sh
+
+# Inside the container:
+whoami
+id
+
+# Now run a long-lived process inside the container:
+sleep 100
+
+# From a second host terminal:
+ps -fC sleep
+```
+
+On a standard rootful Docker setup, this process commonly appears as root from the host’s perspective. With traditional rootful Docker and no user namespace remapping, root in the container is much closer to root on the host than people intuitively expect.
+
+> Podman behaves differently when used rootless: a non-root user running rootless Podman starts containers under that user’s account, using user namespaces and subordinate UID/GID mappings.
+
+### Use `USER` in the Dockerfile
+
+Docker’s `USER` instruction sets the username or UID, and optionally group or GID, used for later `RUN` instructions and for the runtime `ENTRYPOINT` and `CMD`.
+
+A hardened Dockerfile should create a dedicated user and switch to it before the final runtime command.
+
+```Dockerfile
+FROM node:22-bookworm-slim
+
+ENV NODE_ENV=production
+
+WORKDIR /app
+
+# Create a fixed non-root user and group.
+RUN groupadd --system --gid 10001 appgroup \
+ && useradd --system \
+      --uid 10001 \
+      --gid appgroup \
+      --home-dir /app \
+      --shell /usr/sbin/nologin \
+      appuser
+
+COPY package*.json ./
+RUN npm ci --omit=dev \
+ && npm cache clean --force
+
+COPY --chown=10001:10001 src ./src
+
+# Prevent accidental writes to application code.
+RUN chmod -R go-w /app
+
+USER 10001:10001
+
+EXPOSE 3000
+
+CMD ["node", "src/server.js"]
+```
+
+Using a numeric UID/GID is often better than relying only on a username. Names can differ between host and container images, while numeric IDs are what the kernel actually enforces.
+
+
+### Override the user with `docker run --user`
+
+Docker’s docker run supports `-u` / `--user` using the format `<name|uid>[:<group|gid>]`. Example:
+```bash
+sudo docker run --rm -it --user 10001:10001 alpine sh
+
+# Inside the container:
+id
+```
+
+### Set `user`: in Docker Compose
+
+Compose supports the same idea at service level. The user field overrides the image’s default user; if neither Compose nor the image sets a user, the service runs as root.
+```yaml
+services:
+  app:
+    image: myapp:1.0.0
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+```
 
 ## Run periodic security benchmarks
 - for example CIS Docker Benchmark or Docker Bench for Security

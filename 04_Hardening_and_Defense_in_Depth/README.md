@@ -15,6 +15,8 @@
 - Set the right capabilities
 - Do not mount sensitive host paths
 - Add Resource Limits to Prevent Abuse and Denial of Service
+- Run containers as a non-root UID/GID
+- Run periodic security benchmarks
 
 ## [Managing Secrets In Containerized Environments](./02_Managing_Secrets_in_Containerized_Environments/README.md)
 
