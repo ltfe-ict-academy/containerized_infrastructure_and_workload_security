@@ -19,5 +19,29 @@
 - Run Periodic Security Benchmarks
 
 ## [Managing Secrets In Containerized Environments](./02_Managing_Secrets_in_Containerized_Environments/README.md)
+- Secrets fundamentals and threat model
+    - What is a secret?
+    - Secret lifecycle
+    - Threat model for containerized apps
+- How secrets leak in Docker projects
+    - Secrets in source code
+    - Secrets in `.env` files committed to Git
+    - Secrets in `docker-compose.yml`
+    - Secrets in Dockerfile `ENV`
+    - Secrets in Dockerfile `ARG`
+    - Secrets in image layers
+    - Secrets in `docker history`
+    - Secrets in build cache
+    - Secrets in logs
+    - Secrets in crash dumps
+    - Secrets in shell history
+    - Secrets in CI/CD job output
+    - Secrets in Docker inspection output
+    - Secrets in mounted volumes
+    - Secrets in container process environments
+    - Secrets via `/var/run/docker.sock`
+- Docker Compose secrets
+- Build-time secrets with Docker BuildKit
+- Secret storage options
 
 ## [Container Monitoring And Observability](./03_Container_Monitoring_and_Observability/README.md)

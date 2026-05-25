@@ -17,6 +17,191 @@ By the end of this hands-on section, participants should be able to:
 - apply practical container runtime restrictions
 - stand up a single-node stack with metrics, logs, and a Grafana view into both
 
+
+
+
+
+## Example: Harden a real Docker Compose app
+Exercise
+
+Participants review a sample application and classify each value as:
+
+Secret
+Sensitive but not a secret
+Configuration
+Public metadata
+Unknown / requires policy decision
+
+
+Hands-on lab
+
+“Find the leaks” lab:
+
+Inspect a vulnerable Docker project.
+Search Git history for secrets.
+Inspect image history.
+Inspect runtime environment.
+Review Compose files.
+Review container logs.
+Produce a short risk report.
+
+Hands-on lab
+
+Refactor a Compose app that currently uses:
+
+environment:
+  DB_PASSWORD: supersecret
+
+into a safer design using:
+
+.env.example
+local-only ignored .env
+Compose secrets for sensitive values
+clear config/secret separation
+
+Hands-on lab
+
+Build a three-service application:
+
+web
+worker
+db
+
+Tasks:
+
+Create separate secrets for database password, API token, and admin bootstrap password.
+Grant each service only the secrets it needs.
+Modify application code to read from /run/secrets.
+Use _FILE style environment variables for images that support them.
+Verify secrets are not present in the Compose file or image history.
+
+Participants build an image that needs a private package token.
+
+Bad version:
+
+ARG NPM_TOKEN
+RUN npm config set //registry.npmjs.org/:_authToken=$NPM_TOKEN
+
+Secure version:
+
+RUN --mount=type=secret,id=npm_token \
+    NPM_TOKEN="$(cat /run/secrets/npm_token)" && \
+    npm config set //registry.npmjs.org/:_authToken="$NPM_TOKEN" && \
+    npm ci
+
+Participants then inspect:
+
+image history
+final filesystem
+build logs
+cache behavior
+
+
+Hands-on lab
+
+Modify a small Python/Node/Go service to:
+
+Read secrets from files.
+Avoid printing secret values in logs.
+Redact secrets in error output.
+Fail safely if a secret is missing.
+Support a restart-based rotation workflow.
+
+Participants compare four designs for the same Docker Compose app:
+
+Plain .env
+Compose secrets from local files
+Encrypted secrets in Git using SOPS
+Runtime fetch from an external secret manager
+
+They score each design against:
+
+developer usability
+production safety
+auditability
+rotation support
+failure modes
+operational complexity
+
+Create a CI workflow that:
+
+Builds a Docker image with BuildKit secrets.
+Runs a secret scan.
+Verifies no secret is present in the final image.
+Publishes only if checks pass.
+Uses environment-scoped secrets.
+
+A production database password was committed to Git and used in a Docker Compose deployment.
+
+Participants must decide:
+
+Is this an incident?
+What systems are affected?
+What needs to be rotated?
+What logs must be checked?
+What containers must be restarted?
+What evidence should be preserved?
+What long-term controls should be added?
+
+Capstone: harden a Docker Compose application
+
+Learning objectives
+
+Participants apply the whole course to a realistic project.
+
+Scenario
+
+A small company has a Docker Compose app with:
+
+web service
+background worker
+PostgreSQL
+Redis
+private package dependency
+third-party API token
+CI pipeline
+staging and production environments
+
+The current project contains secrets in:
+
+.env
+docker-compose.yml
+Dockerfile ARG
+CI logs
+image history
+app logs
+
+Capstone tasks
+
+Participants must:
+
+Create a secret inventory.
+Remove hardcoded secrets.
+Refactor runtime secrets into Docker Compose secrets.
+Refactor build credentials into BuildKit secrets.
+Add .env.example.
+Add .gitignore and .dockerignore controls.
+Add secret scanning.
+Add CI/CD masking and protected variables.
+Write a rotation runbook.
+Write a short team policy.
+
+Final deliverables
+
+Hardened docker-compose.yml
+Hardened Dockerfile
+Secret inventory
+Rotation runbook
+CI/CD pipeline snippet
+Risk assessment
+Short presentation explaining trade-offs
+
+
+
+
+
+
+
 ## Final Architecture
 
 ```text
