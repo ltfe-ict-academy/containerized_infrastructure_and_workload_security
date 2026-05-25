@@ -871,11 +871,147 @@ This should not be used casually. Device access can expose kernel interfaces, ha
 | Does it need a host device?                                | Only if there is a specific hardware requirement.       |
 
 
-## Add resource limits to prevent abuse and denial of service
-- Limit resources: memory, CPU, PIDs, file descriptors, and restart loops.
-- Use pids_limit, mem_limit, cpus, and ulimits.
-- Use init: true to handle zombie processes.
-- Use log limits so a noisy container cannot fill the disk.
+## Add Resource Limits to Prevent Abuse and Denial of Service
+
+A container should not be allowed to consume unlimited host resources. Containers share the host kernel, CPU, memory, process table, disk, and logging backend with other workloads. If one container is compromised, misconfigured, or simply buggy, it can affect the whole machine unless we define clear resource boundaries.
+
+This is not only about performance. Resource limits are a security control. They reduce the blast radius of denial-of-service attacks, fork bombs, memory leaks, log floods, and runaway worker processes.
+
+A vulnerable application endpoint that triggers expensive processing may become a CPU exhaustion issue. A file upload bug may become a disk exhaustion issue. A subprocess bug may become a process exhaustion issue. A noisy debug log may fill the host disk. The container did not need extra privileges to cause damage; it only needed unlimited access to shared resources.
+
+By default, a container may be able to use a large amount of the host’s available resources. Docker uses Linux control groups, or cgroups, to enforce limits such as memory, CPU, and process counts. Cgroups are one of the Linux features that make containers practical: they control how much of the host a group of processes can consume.
+
+Without limits, this simple container can consume CPU continuously:
+```bash
+sudo docker run --rm alpine sh -c 'while true; do :; done'
+```
+
+A memory-hungry process can create pressure on the host:
+```bash
+sudo docker run --rm python:3.12-alpine \
+  python -c 'x=[]; [x.append("A" * 1024 * 1024) for _ in range(100000)]'
+```
+
+A fork bomb can rapidly create processes until the host struggles to schedule normal work:
+```bash
+:(){ :|:& };:
+```
+
+Do not run that fork bomb on an important system. The point is that process creation itself is a resource. If we limit only memory and CPU, we still leave other denial-of-service paths open.
+
+A hardened container configuration should limit at least:
+| Resource         | Why it matters                                            |
+| ---------------- | --------------------------------------------------------- |
+| Memory           | Prevents one container from exhausting host RAM.          |
+| CPU              | Prevents one container from starving other workloads.     |
+| PIDs             | Prevents fork bombs and runaway process creation.         |
+| File descriptors | Prevents excessive open files, sockets, and connections.  |
+| Restart loops    | Prevents crash loops from constantly consuming resources. |
+| Logs             | Prevents a noisy container from filling host disk space.  |
+
+
+### Limit Memory
+
+Memory limits are one of the most important controls. A memory leak in a containerized application is still a memory leak on the host. If the container is allowed to grow without limit, the host may start killing processes under memory pressure, and the result may affect unrelated services. In Compose, set a memory limit with `mem_limit`:
+```yaml
+services:
+  web:
+    image: example/web:1.0
+    mem_limit: 512m
+```
+
+This means the web container cannot use more than 512 MB of memory. The correct value depends on the application, but the value should be intentional. A small API service may need far less. A Java application, database, or image-processing worker may need more. A good approach is to observe normal memory usage under load, then set a limit with enough headroom for expected spikes. Do not set the limit so low that normal traffic causes constant crashes. Do not leave it unlimited because “we are not sure yet.”
+
+### Limit CPU
+
+CPU limits prevent a single container from consuming all available CPU time. This matters for compromised workloads, expensive requests, cryptocurrency miners, runaway loops, and accidental infinite processing. In Compose:
+```yaml
+services:
+  web:
+    image: example/web:1.0
+    cpus: "1.0"
+```
+
+This gives the container the equivalent of one CPU core. It may still run on different physical cores over time, but cgroups enforce the amount of CPU time it can consume. CPU limits are especially important for externally reachable services. An attacker may not need to crash the application if they can make it spend all available CPU on expensive requests.
+
+### Limit Process Creation with `pids_limit`
+
+A PID limit controls how many processes and threads a container can create. This is an important defense against fork bombs and process leaks. In Compose:
+```yaml
+services:
+  web:
+    image: example/web:1.0
+    pids_limit: 100
+```
+
+This limits the container to 100 processes. For many web applications, that is already generous. Some runtimes create multiple helper processes or threads, so test before setting the value too aggressively. This limit protects the host process table. If a compromised container tries to create thousands of processes, it hits the container’s cgroup limit instead of exhausting the host. Inside the container, a fork-heavy workload will fail much earlier than it would on an unlimited host. That failure is exactly what we want: the container is constrained before it can harm the rest of the system.
+
+### Limit File Descriptors with `ulimits`
+
+File descriptors represent open files, sockets, pipes, and similar resources. A network service that leaks sockets or accepts too many connections may exhaust file descriptors. That can cause denial of service inside the container and sometimes pressure on the host.
+
+In Compose, use ulimits:
+```yaml
+services:
+  web:
+    image: example/web:1.0
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 4096
+```
+
+The soft value is the default limit seen by the process. The hard value is the maximum value the process can raise itself to without additional privilege. This is useful for web servers, reverse proxies, workers, and applications that handle many network connections. The limit should match the expected concurrency model. Too low, and the application fails under normal load. Too high, and a connection flood or file descriptor leak has a larger blast radius.
+
+### Use `init: true` to Handle Zombie Processes
+
+Containers often run a single main process as PID 1. In a normal Linux system, PID 1 has special responsibilities. One of them is reaping zombie processes.
+
+A zombie process is a child process that has exited but has not been collected by its parent. If an application starts child processes and does not handle them correctly, zombies can accumulate. This is especially common in containers that run shell scripts, subprocess-heavy workers, or applications that were not designed to run as PID 1. In Compose, enable Docker’s small init process:
+```yaml
+services:
+  web:
+    image: example/web:1.0
+    init: true
+```
+ 
+This inserts a minimal init process as PID 1 inside the container. It forwards signals and reaps zombie processes. This helps containers shut down more cleanly and prevents zombie buildup from becoming a resource issue. This does not replace application-level process handling. The application should still manage child processes properly. But `init: true` is a practical safety net and should be considered for services that spawn subprocesses.
+
+### Limit Restart Loops
+
+Restart policies are useful. If a service crashes once because of a temporary problem, restarting it may restore availability. But unlimited restart loops can create their own denial-of-service problem.
+
+A broken container that starts, crashes, writes logs, and immediately restarts can consume CPU, disk I/O, and log storage continuously. In a Compose environment, avoid blindly using `restart: always` for every service.
+
+Safer pattern for many services:
+```yaml
+services:
+  worker:
+    image: example/worker:1.0
+    restart: "on-failure:5"
+```
+
+This restarts the container only when it exits with a failure status, and only up to five times. Use restart policies deliberately. A database, API, queue worker, and one-shot migration job should not all have the same restart behavior. A migration container, for example, may be better with no restart policy at all, because repeated execution could corrupt state or repeatedly apply partial changes.
+
+### Limit Container Logs
+
+Container logs are often stored on the host. If a container writes logs without limits, it can fill the disk. This can become a denial-of-service issue even when CPU and memory are controlled.
+
+> By default, no log-rotation is performed. As a result, log-files stored by the default json-file logging driver logging driver can cause a significant amount of disk space to be used for containers that generate much output, which can lead to disk space exhaustion.
+
+A noisy application can do this accidentally. An attacker can also intentionally trigger log-heavy paths by sending malformed requests, causing repeated stack traces, validation errors, or authentication failures. In Compose, configure log rotation:
+```yaml
+services:
+  web:
+    image: example/web:1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+This keeps up to three log files of 10 MB each for the container. After that, Docker rotates old logs. Log limits are often forgotten because they are not inside the application. But they are part of runtime hardening. A container that can write unlimited logs can consume host disk, and a full disk can break Docker, databases, monitoring agents, SSH access, and system services.
 
 ## Run containers as a non-root UID/GID
 
