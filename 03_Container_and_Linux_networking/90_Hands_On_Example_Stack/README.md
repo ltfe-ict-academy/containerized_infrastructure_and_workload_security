@@ -8,7 +8,16 @@
 - Use internal: true for networks that should not have external connectivity.
 - Publish only required ports.
 - Bind host ports to 127.0.0.1 when traffic should only be local or behind a reverse proxy.
-
+- Segment networks: frontend, backend, database/admin networks as separate networks.
+- Use internal: true for networks that should not have external connectivity.
+- Publish only required ports.
+- Bind host ports to 127.0.0.1 when traffic should only be local or behind a reverse proxy.
+- Avoid network_mode: host unless absolutely necessary.
+- publish only what must be exposed
+- bind local-only ports to loopback
+- segment services onto the minimum necessary networks
+- keep data stores off edge-facing networks
+- review egress as well as ingress
 
 Part 03 takes the cleaner images from Part 02 and fixes the next big problem: network design.
 
