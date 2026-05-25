@@ -649,11 +649,139 @@ sudo docker run --rm --security-opt no-new-privileges:true nnp-demo
 ```
 
 ## Set the right capabilities
-- Drop all Linux capabilities by default with cap_drop: ["ALL"].
-- Add back only the capabilities actually needed, for example NET_BIND_SERVICE if binding to ports below 1024.
 
+Linux capabilities split traditional root privileges into smaller pieces. Instead of treating root as one unlimited permission set, the kernel can check whether a process has a specific capability for a specific privileged action. The Linux man page describes capabilities as independently enabled and disabled units of privilege.
+
+Docker supports capability control with:
+```bash
+--cap-drop
+--cap-add
+```
+
+In Compose, the equivalent settings are:
+```yaml
+cap_drop:
+  - ALL
+
+cap_add:
+  - NET_BIND_SERVICE
+```
+
+[Docker Compose documents](https://docs.docker.com/reference/compose-file/services/#cap_add) `cap_add` and `cap_drop` as service attributes for adding or dropping container capabilities.
+
+Docker already drops some capabilities by default, but the default set may still be broader than your application needs. Docker’s own security documentation says the best practice is to remove all capabilities except those explicitly required by the process.
+
+For example, a normal web API usually does not need to:
+- change file ownership;
+- create device nodes;
+- modify routing tables;
+- use raw sockets;
+- trace other processes;
+- mount filesystems;
+- load kernel modules.
+
+The safest approach is to start with no capabilities and add back only what the workload needs.
+
+A container image may start successfully with Docker’s default capabilities, but fail once we drop them all. That failure is useful. It tells us the application was depending on kernel privileges that were not obvious from the Dockerfile or source code.
+
+To discover what the application is asking the kernel for, we can use `capable`, an eBPF-based tracing tool from BCC. It traces Linux capability checks in the kernel and can help build a capability allowlist for an application. Because it uses BPF, it normally has to run as root on the host.
+
+Let's run the full demo with `capable`:
+```bash
+# Move to the with the example files:
+cd ./examples/01_discovering_required_capabilities
+
+# Check the files
+cat main.c
+cat Dockerfile
+
+# Build the image:
+sudo docker build -t cap-demo:latest .
+
+# Run the app with no capabilities:
+sudo docker run --rm --cap-drop=ALL cap-demo:latest
+# The app failed because it tried to call chown, and CAP_CHOWN was not available.
+
+# Run the failing container again and in the next 10s run the capable-bpfcc in another terminal
+sudo docker run --rm -it \
+  --name captest \
+  --cap-drop=ALL \
+  --entrypoint sh \
+  cap-demo:latest \
+  -c 'sleep 10; exec /usr/local/bin/cap-demo'
+
+# In another terminal, find the PID of the container process and run capable:
+PID=$(sudo docker inspect -f '{{.State.Pid}}' captest)
+sudo capable-bpfcc -p "$PID" --unique
+
+# Now add CHOWN and try again
+sudo docker run --rm -it \
+  --name captest \
+  --cap-drop=ALL \
+  --cap-add=CHOWN \
+  --entrypoint sh \
+  cap-demo:latest \
+  -c 'sleep 10; exec /usr/local/bin/cap-demo'
+
+# In another terminal, find the PID of the container process and run capable:
+PID=$(sudo docker inspect -f '{{.State.Pid}}' captest)
+sudo capable-bpfcc -p "$PID" --unique
+
+# Now add CAP_SETGID and try again
+sudo docker run --rm -it \
+  --name captest \
+  --cap-drop=ALL \
+  --cap-add=CHOWN \
+  --cap-add=SETGID \
+  --entrypoint sh \
+  cap-demo:latest \
+  -c 'sleep 10; exec /usr/local/bin/cap-demo'
+
+# In another terminal, find the PID of the container process and run capable:
+PID=$(sudo docker inspect -f '{{.State.Pid}}' captest)
+sudo capable-bpfcc -p "$PID" --unique
+
+# Now add CAP_SETUID and try again
+sudo docker run --rm -it \
+  --name captest \
+  --cap-drop=ALL \
+  --cap-add=CHOWN \
+  --cap-add=SETGID \
+  --cap-add=SETUID \
+  --entrypoint sh \
+  cap-demo:latest \
+  -c 'sleep 10; exec /usr/local/bin/cap-demo'
+
+# In another terminal, find the PID of the container process and run capable:
+PID=$(sudo docker inspect -f '{{.State.Pid}}' captest)
+sudo capable-bpfcc -p "$PID" --unique
+
+# The container is now running
+
+# Try to run the hardened container in Docker Compose
+sudo docker compose -f docker-compose.yml up --build
+```
 
 ## Do not mount sensitive host paths
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 - Use read_only: true for the container root filesystem.
 - Add explicit writable tmpfs mounts only where the app needs temporary writes, such as /tmp or /run.
 - Avoid host bind mounts where possible; prefer named volumes.

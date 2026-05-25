@@ -1,0 +1,13 @@
+services:
+  cap-demo:
+    build: .
+    image: cap-demo:latest
+    privileged: false
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
