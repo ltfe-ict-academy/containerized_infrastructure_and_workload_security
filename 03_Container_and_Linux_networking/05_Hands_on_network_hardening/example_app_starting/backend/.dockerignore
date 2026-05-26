@@ -1,0 +1,19 @@
+# Allowlist only the files needed by this image build.
+**
+!Dockerfile
+!.dockerignore
+!app.py
+!pyproject.toml
+!uv.lock
+
+# Extra deny rules for readability and future maintainers.
+.env
+.env.*
+.git
+.git/**
+__pycache__
+**/__pycache__/**
+*.pyc
+*.pyo
+.venv
+.venv/**
