@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import Numeric, Text, create_engine, literal, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -47,9 +48,51 @@ class Product(Base):
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
 
 
+class AppUser(Base):
+    __tablename__ = "app_users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+_SEED_PRODUCTS = [
+    {"name": "Red Mug", "description": "Ceramic coffee mug used by the frontend demo.", "price": Decimal("12.50")},
+    {"name": "Blue Hoodie", "description": "Lightweight hoodie for conference labs.", "price": Decimal("39.00")},
+    {"name": "Sticker Pack", "description": "Security-themed stickers for laptops.", "price": Decimal("7.00")},
+    {"name": "Notebook", "description": "Paper notebook for architecture sketches.", "price": Decimal("9.50")},
+]
+
+_SEED_USERS = [
+    {
+        "username": "admin",
+        "password_hash": "$2b$12$trainingonlyplaceholderhashforadminuser0000000000",
+        "role": "admin",
+    },
+    {
+        "username": "analyst",
+        "password_hash": "$2b$12$trainingonlyplaceholderhashforanalyst000000000",
+        "role": "analyst",
+    },
+]
+
+
+def init_db():
+    Base.metadata.create_all(engine)
+    with SessionLocal() as session:
+        session.execute(pg_insert(Product).values(_SEED_PRODUCTS).on_conflict_do_nothing())
+        session.execute(
+            pg_insert(AppUser).values(_SEED_USERS).on_conflict_do_nothing(index_elements=["username"])
+        )
+        session.commit()
+    LOGGER.info("database schema and seed data initialised")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     wait_for_services()
+    init_db()
     yield
 
 

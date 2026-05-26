@@ -37,7 +37,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
-      - ./db/init:/docker-entrypoint-initdb.d:ro
 
   redis:
     image: dhi.io/redis:8.6.3-debian13@sha256:db21f5e0bf266b9fbd8df9b7aef140785465f5330fdc86662ec960d10118cefe

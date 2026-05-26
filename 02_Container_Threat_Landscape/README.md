@@ -93,5 +93,17 @@
     - Dockerscan example
 
 ## [Hands-On: Image Hardening](./04_Hands_on_image_hardening/README.md)
+- Run the Dockerfiles Linters
+- Narrow the build context before changing Dockerfiles
+- Pin base images by tag and digest
+- Harden the backend image
+- Harden the frontend image
+- Harden public image references in Compose
+- Build the final images and run the hardened application
+- Run the linters again
+- Scan starting and final images
+- Generate SBOMs and attach build attestations
+
 ## [Container Registries And Supply Chain Attacks](./05_Container_registries_and_supply_chain_attacks/README.md)
+
 ## [Exploiting Web Apps, The Poster Child For Cloud Services](./06_Exploiting_web_apps_the_poster_child_for_cloud_services/README.md)
