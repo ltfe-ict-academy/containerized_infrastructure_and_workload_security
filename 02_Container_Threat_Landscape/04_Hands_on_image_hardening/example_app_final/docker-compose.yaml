@@ -3,7 +3,7 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_API_BASE_URL: "http://localhost:8000/api"
+        VITE_API_BASE_URL: "http://${SERVER_IP:-localhost}:8000/api"
     ports:
       - "3000:8080"
     depends_on:
@@ -18,8 +18,8 @@ services:
         APP_UID: "10001"
         APP_GID: "10001"
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-courseapp}"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:-courseappredis}@redis:6379/0"
       ENABLE_DEBUG_ROUTES: "false"
     ports:
       - "8000:8000"
@@ -28,11 +28,11 @@ services:
       - redis
 
   db:
-    image: dhi.io/postgres:18.4-alpine3.23-fips@sha256:94124859b2bd4274083a716df88d6f2a5e86879659499385da01567443d77c64
+    image: dhi.io/postgres:18-alpine3.22@sha256:092b83bf7e7be059a662c4aa5987f0e0e4dc03a5ea7097ec4e05759de3f6d1b3
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-courseapp}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
       - "5432:5432"
     volumes:
@@ -41,6 +41,10 @@ services:
 
   redis:
     image: dhi.io/redis:8.6.3-debian13@sha256:db21f5e0bf266b9fbd8df9b7aef140785465f5330fdc86662ec960d10118cefe
+    command:
+      - redis-server
+      - --requirepass
+      - "${REDIS_PASSWORD:-courseappredis}"
     ports:
       - "6379:6379"
 

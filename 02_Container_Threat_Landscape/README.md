@@ -10,6 +10,7 @@
 - Myth 7: Popular images are automatically trustworthy
 - Myth 8: Container escapes are only theoretical
 - Myth 9: Containers Reduce Complexity
+
 ## [Attack Surface In Containerized Environments](./02_Attack_surface_in_containerized_environments/README.md)
 - Real-World Examples of Compromised Container Environments
     - Tesla Kubernetes console cryptojacking incident
