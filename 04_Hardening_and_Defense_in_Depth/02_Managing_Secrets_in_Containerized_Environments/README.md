@@ -154,7 +154,7 @@ Dockerfile `ENV` is a common beginner mistake because it “works.” The contai
 
 Example:
 ```bash
-cd ./examples/04_secrets_in_dockerfile
+cd ./examples/04_secrets_in_dockerfile_env
 
 cat Dockerfile
 
@@ -171,92 +171,144 @@ Even if the application never prints the token, Docker metadata may still reveal
 
 ### Secrets in Dockerfile `ARG`
 
+`ARG` feels safer than `ENV` because it is “only build-time,” but it can still leak through image history, build metadata, and build cache behavior. Docker’s documentation warns that build arguments are inappropriate for build secrets because they can persist in the final image.
 
-https://chatgpt.com/c/6a018720-14d8-8332-940c-19e939032fdf
+Example:
+```bash
+cd ./examples/05_secrets_in_dockerfile_arg
+
+cat Dockerfile
+
+sudo docker build --build-arg NPM_TOKEN=FAKE_arg_token_123 -t arg-leak-demo .
+sudo docker run --rm arg-leak-demo
+sudo docker history --no-trunc arg-leak-demo
+```
 
 ### Secrets in image layers
 
+If you copy a secret into an image and delete it later, the final filesystem may look clean, but an earlier layer can still contain the file. Deleting a file in a later layer does not necessarily erase it from earlier layers. The fix is not “copy then delete.” The fix is “never copy the secret into the image layer in the first place.”
+
 ### Secrets in `docker history`
+
+`docker history` can reveal build commands, build arguments, and mistakes that happened during image creation. Docker provides docker history, and Docker’s own build checks warn against secrets in ARG and ENV because they persist in the final image. An attacker who can pull the image from a registry may not need source code or CI logs. They can inspect the image locally and search history, labels, environment variables, and layers. The practical lesson: treat container registries as sensitive systems, especially when images were built before your team had good secret hygiene.
 
 ### Secrets in build cache
 
+Build cache is subtle because it is created for performance, not security. If a build step uses a secret in a way that affects files, layers, or command metadata, the cache can preserve traces of that secret. This can happen locally on developer machines, on shared CI runners, or in remote build cache systems. Docker’s BuildKit secret mounts are designed to reduce this risk by allowing secrets to be mounted temporarily during build steps.
+
 ### Secrets in logs
 
-### Secrets in crash dumps
+Logs are one of the most realistic leak paths. Docker captures container output from stdout and stderr, and `docker logs` retrieves that output. Docker’s logging documentation states that, by default, `docker logs` shows the command’s stdout and stderr. Once a secret is logged, it may leave the Docker host. It can be forwarded to log drivers, SIEM platforms, APM tools, support bundles, alerting systems, and long-term archives. The attacker does not need container access if they have access to logs. Do not log full connection strings, authorization headers, JWTs, session cookies, or webhook payloads.
 
-### Secrets in shell history
-
-### Secrets in CI/CD job output
-
-### Secrets in Docker inspection output
-
-### Secrets in mounted volumes
-
-### Secrets in container process environments
-
-### Secrets via `/var/run/docker.sock`
-
-## Docker Compose secrets
-Docker Compose mounts secrets as files under /run/secrets/<secret_name> and grants access only to services that explicitly reference those secrets.
-
-Participants learn practical Docker Compose secret injection without Kubernetes.
-- Compose secrets: top-level element
-- Service-level secrets: access
-- File-backed secrets
-- Environment-backed secrets
-- /run/secrets/<secret_name>
-- Per-service access control
-- File permissions
-- Secret naming conventions
-- Avoiding broad sharing across services
-- _FILE environment variable convention used by many official images
-- Development versus production Compose files
-- compose.override.yml
-- Multiple secret files for different environments
-- What Compose secrets do and do not protect against
-- Difference between Docker Compose secrets and a full external secrets manager
-
+Crash dumps are dangerous because they capture application state at the worst possible time: during an exception, panic, fatal error, or debug failure. They may contain environment variables, request headers, stack frames, local variables, connection strings, tokens, and memory fragments. In Docker, crash output often goes directly to stdout/stderr, which then becomes Docker logs. That connects crash leakage directly to the logging pipeline. Docker’s logs collect stdout and stderr by default, so a verbose crash can become a persistent secret leak.
 
 ## Build-time secrets with Docker BuildKit
 
-- Safely use credentials during image builds without baking them into images.
-- Difference between build-time and runtime secrets
-- docker build --secret
-- Dockerfile RUN --mount=type=secret
-- Secret source from file
-- Secret source from environment variable
-- Custom target paths
-- Multi-stage builds and secret boundaries
-- Verifying that secrets are not present in final image layers
-Secret scanning:
-pre-commit scanning
-container image scanning
+[Build-time secrets](https://docs.docker.com/build/building/secrets/) solve a narrow but important problem: the image build needs a credential, but the final image must not contain it. A common example is an `npm`, `pip`, Maven, Git, cloud storage, or package registry token that is needed only while downloading private dependencies. Docker BuildKit supports this through build secrets: the secret is passed to `docker build` with `--secret`, and the Dockerfile consumes it only inside a specific `RUN` instruction with `RUN --mount=type=secret`. By default, BuildKit mounts the secret as a temporary file under `/run/secrets/<id>`, and Docker also supports file-backed secrets, environment-backed secrets, custom target paths, and secret values mounted as environment variables for the build step.
 
-## Secret storage options
+The distinction between build-time and runtime secrets is important. A build-time secret is needed to create the image, but the application should not need it after the image is built. A runtime secret is needed when the container is running, such as a database password, OAuth client secret, or API token used by the application. BuildKit secrets are not a replacement for runtime secret management. They only protect secrets during image construction.
 
-Participants learn the main non-Kubernetes options for storing and distributing secrets.
-SOPS-encrypted files
-Mozilla SOPS with age or GPG
-HashiCorp Vault
-AWS Secrets Manager
-Azure Key Vault
-Google Secret Manager
-1Password CLI / Doppler / Infisical style developer workflows
-CI/CD secret stores
-Host-level secret injection
-Pull-at-startup pattern
-Sidecar-like pattern without Kubernetes
-Short-lived credentials
-Dynamic database credentials
-Trade-offs:
-simplicity
-auditability
-rotation
-offline development
-blast radius
-vendor lock-in
-developer experience
+This is different from Dockerfile `ARG` and `ENV`. Docker warns that sensitive values should not be placed in `ARG` or `ENV`, because they can persist in the final image or its metadata. Docker’s build checks recommend secret mounts instead of `ARG` or `ENV` for build secrets.
 
+Using BuildKit secrets without baking them into the image:
+```bash
+cd ./examples/06_buildkit_secrets
 
+mkdir -p secrets
+printf "FAKE_npm_token_123\n" > secrets/npm_token.txt
 
+# Explore the Dockerfile that uses BuildKit secrets
+cat Dockerfile
 
+sudo LICENSE_KEY="FAKE_license_key_456" docker build \
+  --secret id=npm_token,src=./secrets/npm_token.txt \
+  --secret id=license_key,env=LICENSE_KEY \
+  -t buildkit-secret-demo .
+
+sudo docker run --rm buildkit-secret-demo
+```
+
+In this example, the token from `secrets/npm_token.txt` is available only as `/tmp/npm_token` during that one `RUN` instruction. The `LICENSE_KEY` variable is also available only during that one build step. The final image receives only `/app/status.txt`.
+
+Multi-stage builds help create a clean boundary, but they do not automatically make a build safe. If a build step writes the secret into `/out`, a log file, a package manager config file, or a compiled artifact, `COPY --from=build` can still carry the leak into the final image. BuildKit prevents the secret mount itself from becoming an image layer; **it cannot prevent careless commands from copying the secret somewhere else**.
+
+Verify the final image:
+```bash
+sudo docker history --no-trunc buildkit-secret-demo | grep -E "FAKE_npm_token|FAKE_license_key" || echo "No fake secret found in docker history"
+
+sudo docker save buildkit-secret-demo -o buildkit-secret-demo.tar
+
+sudo grep -aE "FAKE_npm_token|FAKE_license_key" buildkit-secret-demo.tar || echo "No fake secret found in saved image tar"
+
+sudo rm buildkit-secret-demo.tar
+sudo rm -rf secrets
+```
+
+This is a useful sanity check when you know the exact test value, but it is not enough for real pipelines. Add secret scanning before and after the image is built.
+
+For source code and Git history, a pre-commit hook catches many leaks before they enter the repository. [Gitleaks](https://github.com/gitleaks/gitleaks) supports pre-commit hooks and can scan repositories, directories, and standard input for secrets.
+
+```bash
+cat > .pre-commit-config.yaml <<'YAML'
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.2
+    hooks:
+      - id: gitleaks
+YAML
+
+pre-commit install
+pre-commit run --all-files
+```
+
+For container images, scan the image itself. [Trivy scans files](https://trivy.dev/docs/latest/guide/scanner/secret/) inside container images for vulnerabilities, misconfigurations, secrets, and licenses, and secret scanning is enabled by default for image files. Trivy can also scan image configuration for secrets when enabled with `--image-config-scanners`.
+
+```bash
+# Looks clean
+sudo trivy image --scanners secret buildkit-secret-demo
+sudo trivy image --image-config-scanners secret buildkit-secret-demo
+
+# Try again with a known secret to see it detected:
+sudo docker build -t trivy-positive-demo -f Dockerfile.with_secrets .
+sudo trivy image --scanners secret trivy-positive-demo
+```
+
+Secret scanning should not be treated as proof that no secret exists. It is a safety net. The primary control is still design: do not put secrets in source code, Dockerfiles, image layers, build logs, package manager config, or CI output.
+
+## Docker Compose secrets
+
+[Docker Compose secrets](https://docs.docker.com/compose/how-tos/use-secrets/) are a practical way to inject sensitive values into containers without putting the values directly in `docker-compose.yml` or environment variables. Compose uses a two-step model: define the secret under the top-level secrets element, then grant access to specific services with the service-level secrets attribute. A secret defined at the top level is not automatically available to every service. It must be explicitly attached to each service that needs it. Compose mounts secrets as files inside the container, normally under `/run/secrets/<secret_name>`.
+
+Compose supports both file-backed and environment-backed secrets. A file-backed secret gets its value from a file on the host. An environment-backed secret gets its value from a host environment variable. The Compose specification describes these as file and environment sources, and Docker’s Compose reference notes that environment-backed secrets are supported by Docker Compose but not by `docker stack deploy`.
+
+Demo: per-service secret access in Compose:
+```bash
+cd ./examples/07_compose_secrets
+
+mkdir -p secrets
+printf "FAKE_db_password_456\n" > secrets/db_password.txt
+chmod 600 secrets/db_password.txt
+
+sudo API_TOKEN="FAKE_compose_env_token_789" docker compose run --rm app
+sudo API_TOKEN="FAKE_compose_env_token_789" docker compose run --rm worker
+
+sudo docker compose down -v
+```
+
+The app service can read both db_password and api_token. The worker service cannot read either because it was not granted access. This is the practical value of Compose secrets: access can be scoped per service.
+
+The db service demonstrates the `_FILE` convention. Many official images support variables such as `POSTGRES_PASSWORD_FILE`, `MYSQL_PASSWORD_FILE`, or similar names. Instead of placing the password directly in an environment variable, the variable points to a file containing the password. Docker’s Compose documentation shows this convention with official images such as MySQL and Postgres.
+
+Secret naming also matters. Use names that describe purpose and scope, such as `db_password`, `stripe_api_key`, or `app_jwt_signing_key`. Avoid names like secret, password, or token1, because they become unclear as the Compose file grows.
+
+File permissions still matter. The host file in the example is restricted with chmod 600, because a file-backed Compose secret starts as a real file on the host. Docker Compose also supports long syntax for service secrets, including target, uid, gid, and mode, but Docker’s reference notes an important limitation: uid, gid, and mode are implemented only for environment-backed secrets in Docker Compose; for file-backed secrets, Compose uses a bind mount and those attributes are ignored.
+
+## Runtime retrieval from external secret stores
+
+Another option is to avoid injecting the actual application secret at container start and let the application retrieve it from a secret store at runtime. In this pattern, the container image contains application code, not the secret. When the application starts, it authenticates to a secret management service such as **AWS Secrets Manager, HashiCorp Vault, Azure Key Vault, or Google Secret Manager**, then requests only the secrets it is allowed to read.
+
+AWS Secrets Manager is designed to manage, retrieve, and rotate database credentials, application credentials, OAuth tokens, API keys, and other secrets. AWS describes the preferred pattern as replacing hard-coded credentials with runtime calls to Secrets Manager when the application needs them. [HashiCorp Vault](https://github.com/hashicorp/vault) can also issue dynamic secrets: credentials generated on demand, unique to each client, and short-lived. This reduces the value of a stolen secret because it expires quickly and can be traced to a specific requester.
+
+This pattern improves lifecycle control, but it introduces a bootstrapping question: how does the container authenticate to the secret store in the first place? The answer should not be “put a master token in the image.” In production, use workload identity, cloud IAM roles, short-lived tokens, mTLS, Vault AppRole, or another platform identity mechanism. The application’s identity should be allowed to read only the specific secret paths it needs.
+
+Runtime retrieval is strongest when combined with short-lived credentials, narrow access policies, encrypted transport, and careful application behavior. Read the secret only when needed, keep it in memory, avoid logging it, handle rotation, and design for secret-store outages. A secret manager reduces secret sprawl, but it does not remove the need for least privilege.

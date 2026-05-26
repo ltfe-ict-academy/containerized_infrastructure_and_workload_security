@@ -33,15 +33,8 @@
     - Secrets in `docker history`
     - Secrets in build cache
     - Secrets in logs
-    - Secrets in crash dumps
-    - Secrets in shell history
-    - Secrets in CI/CD job output
-    - Secrets in Docker inspection output
-    - Secrets in mounted volumes
-    - Secrets in container process environments
-    - Secrets via `/var/run/docker.sock`
-- Docker Compose secrets
 - Build-time secrets with Docker BuildKit
-- Secret storage options
+- Docker Compose secrets
+- Runtime retrieval from external secret stores
 
 ## [Container Monitoring And Observability](./03_Container_Monitoring_and_Observability/README.md)

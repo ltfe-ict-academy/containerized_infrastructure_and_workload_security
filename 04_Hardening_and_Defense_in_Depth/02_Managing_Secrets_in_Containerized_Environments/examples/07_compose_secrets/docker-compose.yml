@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_DB: appdb
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+
+  app:
+    image: alpine:3.20
+    secrets:
+      - db_password
+      - api_token
+    command: >
+      sh -c '
+        echo "app can see:";
+        ls -l /run/secrets;
+        echo "db password bytes:";
+        wc -c < /run/secrets/db_password;
+        echo "api token bytes:";
+        wc -c < /run/secrets/api_token
+      '
+
+  worker:
+    image: alpine:3.20
+    command: >
+      sh -c '
+        echo "worker can see:";
+        ls /run/secrets 2>/dev/null || echo "no secrets mounted"
+      '
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+
+  api_token:
+    environment: API_TOKEN
