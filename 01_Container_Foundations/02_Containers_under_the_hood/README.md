@@ -39,7 +39,8 @@ The crucial kernel features enabling containerization are:
 A container also needs **something to run** — the binary itself, plus whatever libraries, configuration, and supporting files that binary expects to find on disk when it starts. This can be as little as a single statically-linked executable, or as much as a full distribution's userland (libc, a shell, an init system, system services). The same kernel primitives back both extremes; the difference is convention, giving rise to distinctions like _application containers vs OS containers_, _single-process vs multi-process_, and _with init vs without init_. Either way, an initial file or filesystem tree is required:
 
 - **Filesystem (file / image / rootfs)**
-  - "the userspace the contained process sees at `/` — from a single binary to a full distro rootfs — plus the host filesystem features that present it (bind mounts, overlay / CoW, permissions, ...)"
+  - the userspace the contained process sees at /, from a single binary to a full distro rootfs
+  - plus the host filesystem features that present it (bind mounts, overlay / CoW, permissions, ...)
 
 These features follow the core POSIX philosophy _that everything is either a process or a file_ (i.e. can be managed via filesystem, and utilizes features of filesystems) to enable **process containerization**.
 
@@ -147,6 +148,7 @@ You may interact with cgroups directly on the filesystem. Following a key design
 
 ```bash
 ls -lh /sys/fs/cgroup
+mkdir /sys/fs/mygroup
 ```
 
 ```bash
@@ -201,6 +203,8 @@ cat /sys/fs/cgroup/mygroup/memory.max # 98304
 # add PID 1234 to group
 echo 1234 >> /sys/fs/cgroup/mygroup/cgroup.procs
 ```
+
+> Note: you can get page size using `getconf PAGE_SIZE`. You can remove group if has no tasks inside with `rmdir`, not `rm`.
 
 > Note that these changes are not persistent! For persistent configuration, you would typically use a boot-time script or a daemon like systemd. The default `libcgroup` configuration file is `/etc/cgconfig.conf`, however that may vary by distribution. Some cgroup features may require kernel boot arguments.
 
@@ -261,6 +265,8 @@ Additional Docker flags for cgroups:
 | `--blkio-weight 200` | `io.weight`       | Relative I/O share               |
 
 > **Common misconception:** cgroups are **not** a security boundary. They are an accounting and throttling mechanism. A container without `--memory` can still call every kernel syscall. A container without `--pids-limit` can fork until the host runs out of PIDs — denial of service, not a privilege escalation, but still ugly. Security comes from combining multiple kernel features and security mechanisms: namespaces + capabilities + seccomp + LSMs, not from cgroups only.
+
+> Note: any process kills due to cgroups OOM should also be visible in dmesg.
 
 ### Namespaces
 
@@ -553,7 +559,7 @@ wget -qO- https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-min
 cd ..
 
 # launch sh in seperate ns
-sudo unshare --pid --mount --uts --net --fork --mount-proc chroot alpine-rootfs /bin/sh
+sudo unshare --pid --mount --uts --net --fork --mount-proc=alpine-rootfs/proc chroot alpine-rootfs /bin/sh
 ```
 
 ## Kernel Access Controls
@@ -569,11 +575,11 @@ The kernel ships three further mechanisms that close it. Each narrows a differen
 - **Linux Security Modules / Mandatory Access Controls**
   - "e.g., additional fs-path-based policy (AppArmor)"
 
-  Together with namespaces and cgroups, these form the **defense-in-depth** stack a real container runtime composes on every `docker run`. None of them is sufficient alone; layered, they're what stops a single CVE or misconfiguration from becoming a full host compromise.
+Together with namespaces and cgroups, these form the **defense-in-depth** stack a real container runtime composes on every `docker run`. None of them is sufficient alone; layered, they're what stops a single CVE or misconfiguration from becoming a full host compromise.
 
 ### Linux Capabilities
 
-> TLDR: Root Split into 41 Pieces
+> TLDR: root user permisions into 41 pieces.
 
 Traditional UNIX had two privilege levels: UID 0 and "everything else". UID 0 could do anything; UID 1+ couldn't change the time, load a kernel module, bind to port 80, raw-socket the network, or trace another user's processes.
 
@@ -587,7 +593,7 @@ On a normal host, the workarounds for "this user needs to do _one_ privileged th
 
 These work, but they were designed for multi-user time-shared systems and they're hard to compose. "Let this _process_ do exactly one privileged thing for its whole lifetime" isn't a question they answer cleanly.
 
-Linux **capabilities** (added in kernel 2.2 in 1999) chop root into 41 individually grantable powers, attachable per-process and per-thread. A few that matter:
+Linux process **capabilities** (added in kernel 2.2 in 1999 and added as persistent extended file attributes around 2008) chop root into 41 individually grantable powers, attachable per-process and per-thread. A few that matter:
 
 | Capability             | What it grants                                                          |
 | ---------------------- | ----------------------------------------------------------------------- |
@@ -602,6 +608,8 @@ Linux **capabilities** (added in kernel 2.2 in 1999) chop root into 41 individua
 | `CAP_AUDIT_WRITE`      | Write to the kernel auditing log                                        |
 
 `CAP_SYS_ADMIN` is so broad that it is sometimes referred to as the new root: if you can grant only one capability, you grant `CAP_SYS_ADMIN` and you have given away the kernel.
+
+> Note: You can test with `getcap /bin/ping` on your system.
 
 #### What Docker Gives a Container by Default
 
@@ -625,6 +633,31 @@ docker run --cap-drop=ALL --cap-add=NET_BIND_SERVICE my-app
 
 …and then add the one or two you actually need (commonly nothing at all if you bind to a port > 1024).
 
+For example the official Nginx Docker image needs:
+
+```bash
+docker run -d --name web1 \
+  --cap-drop=ALL \
+  --cap-add=NET_BIND_SERVICE \
+  --cap-add=SETUID \
+  --cap-add=SETGID \
+  --cap-add=CHOWN \
+  --cap-add=DAC_OVERRIDE \
+  nginx:1.27
+```
+
+beacuse:
+
+```text
+NET_BIND_SERVICE  bind to port 80/443 inside container
+SETUID            switch worker processes to nginx user
+SETGID            switch worker group to nginx group
+CHOWN             change file ownership if entrypoint/config requires it
+DAC_OVERRIDE      root-style file access bypass for some protected paths
+```
+
+However, a safer alternative would be building a custom, hardened, unprivileged Nginx instance.
+
 #### Example: Container with Limited Capablities using Unshare and Chroot
 
 ```bash
@@ -638,12 +671,14 @@ The `setpriv` from `util-linux` enables capability specification from host:
 
 ```bash
 # Apply at the unshare boundary instead of inside the container
-sudo unshare --pid --mount --uts --net --fork --mount-proc \
-    setpriv --bounding-set=-all,+cap_net_bind_service --no-new-privs \
-    chroot alpine-rootfs /bin/sh
+sudo unshare --pid --mount --uts --net --fork --mount-proc=alpine-rootfs/proc \
+  setpriv --bounding-set=-all,+net_bind_service,+sys_chroot --no-new-privs \
+  chroot alpine-rootfs /bin/sh
 ```
 
 Alternatively, shell-level tool `capsh` from `libcap` can also be used.
+
+> Note: You can check the supported capabilities using `capsh --print` or `setpriv --dump`.
 
 > Note: A fresh unshare shell inherits whatever capabilities your starting shell has. If you started from `sudo`, that's all 41. We want to keep one or two.
 
@@ -697,10 +732,13 @@ exit
 
 # Step 2 — Give back ONLY the one capability nginx needs.
 docker run --rm --name web \
-    --cap-drop=ALL \
-    --cap-add=NET_BIND_SERVICE \
-    -p 8080:80 \
-    nginx:1.27
+   --cap-drop=ALL \
+   --cap-add=SETUID \
+   --cap-add=SETGID \
+   --cap-add=CHOWN \
+   --cap-add=DAC_OVERRIDE \
+   -p 8080:80 \
+   nginx:1.27
 # 2026/01/15 09:15:33 [notice] 1#1: start worker processes              <- starts cleanly
 
 # In another terminal:
@@ -719,20 +757,70 @@ The production baseline for application containers is exactly this shape: `--cap
 
 ### Syscall Filtering (seccomp)
 
-Namespaces and capabilities cut down _which kernel features_ a container can call. **seccomp** further restricts _which syscalls_ it can touch.
+Capabilities cut down _which kernel features_ a container can call. **seccomp** further restricts _which syscalls_ it can touch.
 
 A Linux kernel has 350+ syscalls. Most workloads use 40–60. **seccomp-bpf** lets you write a small BPF program (think of it as a kernelspace hook code) that decides "allow / deny" per syscall.
 
 - Docker ships a default seccomp profile that blocks ~50 dangerous syscalls (`kexec_load`, `init_module`, `mount`, `reboot`, etc.).
 - The default profile is reasonable but not minimal — several CVEs of the last 5 years were syscalls Docker still permits.
-- You can write a custom profile and apply it with `--security-opt seccomp=profile.json`. Most people don't, because profile-writing is tedious. Tools exist: `oci-seccomp-bpf-hook`, `k8s-seccomp-recorder` — they record syscalls in audit mode and produce a profile for you.
+- You can write a custom profile and apply it with `--security-opt seccomp=profile.json`. Most people don't, because profile-writing is tedious.
+- Tools exist: `oci-seccomp-bpf-hook`, `k8s-seccomp-recorder` — they record syscalls in audit mode and produce a profile for you.
 
-#### Example: Check Seccomp Mode in Container
+#### Example: Apply and Check Seccomp Mode in Container
 
 ```bash
 # Check what mode a container is in
 docker run --rm alpine grep Seccomp /proc/1/status
 # Seccomp:        2          <- 0=disabled, 1=strict, 2=filter
+#
+# Uname example:
+docker run --rm -it alpine /bin/sh
+# In container
+# uname -a
+# ... should work
+```
+
+Now lets make a policy in `profile.json`:
+
+```json
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "defaultErrnoRet": 1,
+  "archMap": [
+    {
+      "architecture": "SCMP_ARCH_X86_64",
+      "subArchitectures": ["SCMP_ARCH_X86", "SCMP_ARCH_X32"]
+    },
+    {
+      "architecture": "SCMP_ARCH_AARCH64",
+      "subArchitectures": ["SCMP_ARCH_ARM"]
+    }
+  ],
+  "syscalls": [
+    {
+      "names": ["uname"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Block kernel information lookup"
+    },
+    {
+      "names": ["chmod", "fchmod", "fchmodat"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Block changing file permissions"
+    }
+  ]
+}
+```
+
+And try again:
+
+```bash
+docker run --rm -it \
+  --security-opt seccomp=profile.json \
+  alpine sh
+# Note: alpine uname binary will mask the "error"
+# E.g.: E_ ,w w Linux
 ```
 
 > **Don't do this:** `--security-opt seccomp=unconfined`. Many tutorials and StackOverflow answers suggest it to make some app work. It removes the syscall filter entirely.
@@ -744,39 +832,84 @@ docker run --rm alpine grep Seccomp /proc/1/status
 The smallest honest demo is a ~20-line C wrapper. Save as seccomp_exec.c:
 
 ```c
+// seccomp_exec.c - load a simple seccomp filter, then exec a program.
+
 #include <seccomp.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <string.h>
+
+static void deny_syscall(scmp_filter_ctx ctx, int syscall_nr, const char *name) {
+    // Block this syscall by returning EPERM.
+    int rc = seccomp_rule_add(ctx, SCMP_ACT_ERRNO(EPERM), syscall_nr, 0);
+
+    // Exit if libseccomp failed to add the rule.
+    if (rc < 0) {
+        fprintf(stderr, "Failed to add rule for %s: %s\n", name, strerror(-rc));
+        seccomp_release(ctx);
+        exit(1);
+    }
+}
 
 int main(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: %s <program> [args...]\n", argv[0]); return 2; }
+    // Require a program to execute.
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <program> [args...]\n", argv[0]);
+        return 2;
+    }
 
-    // Default action: KILL. Then allowlist what a basic shell needs.
-    scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_KILL);
+    // Allow everything by default for an interactive demo.
+    scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ALLOW);
+    if (ctx == NULL) {
+        perror("seccomp_init");
+        return 1;
+    }
 
-    int allow[] = {
-        SCMP_SYS(read), SCMP_SYS(write), SCMP_SYS(open), SCMP_SYS(openat),
-        SCMP_SYS(close), SCMP_SYS(stat), SCMP_SYS(fstat), SCMP_SYS(lstat),
-        SCMP_SYS(execve), SCMP_SYS(exit), SCMP_SYS(exit_group),
-        SCMP_SYS(brk), SCMP_SYS(mmap), SCMP_SYS(mprotect), SCMP_SYS(munmap),
-        SCMP_SYS(rt_sigaction), SCMP_SYS(rt_sigprocmask), SCMP_SYS(rt_sigreturn),
-        SCMP_SYS(ioctl), SCMP_SYS(fcntl), SCMP_SYS(getpid), SCMP_SYS(getuid),
-        SCMP_SYS(getgid), SCMP_SYS(geteuid), SCMP_SYS(getegid),
-        SCMP_SYS(arch_prctl), SCMP_SYS(set_tid_address), SCMP_SYS(access),
-        SCMP_SYS(getdents64), SCMP_SYS(readlink), SCMP_SYS(uname),
-        SCMP_SYS(wait4), SCMP_SYS(clone), SCMP_SYS(vfork),
-    };
-    for (size_t i = 0; i < sizeof(allow)/sizeof(allow[0]); i++)
-        seccomp_rule_add(ctx, SCMP_ACT_ALLOW, allow[i], 0);
+    // Block mounting and unmounting filesystems.
+    deny_syscall(ctx, SCMP_SYS(mount), "mount");
+    deny_syscall(ctx, SCMP_SYS(umount2), "umount2");
 
-    // Explicitly KILL the syscalls we want to highlight
-    seccomp_rule_add(ctx, SCMP_ACT_KILL, SCMP_SYS(mount), 0);
-    seccomp_rule_add(ctx, SCMP_ACT_KILL, SCMP_SYS(init_module), 0);
-    seccomp_rule_add(ctx, SCMP_ACT_KILL, SCMP_SYS(kexec_load), 0);
-    seccomp_rule_add(ctx, SCMP_ACT_KILL, SCMP_SYS(reboot), 0);
+    // Block kernel module operations.
+    deny_syscall(ctx, SCMP_SYS(init_module), "init_module");
+    deny_syscall(ctx, SCMP_SYS(finit_module), "finit_module");
+    deny_syscall(ctx, SCMP_SYS(delete_module), "delete_module");
 
-    seccomp_load(ctx);
+    // Block reboot and kexec operations.
+    deny_syscall(ctx, SCMP_SYS(kexec_load), "kexec_load");
+    deny_syscall(ctx, SCMP_SYS(reboot), "reboot");
+
+#ifdef __NR_bpf
+    // Block loading or manipulating eBPF programs.
+    deny_syscall(ctx, SCMP_SYS(bpf), "bpf");
+#endif
+
+#ifdef __NR_perf_event_open
+    // Block access to performance counters.
+    deny_syscall(ctx, SCMP_SYS(perf_event_open), "perf_event_open");
+#endif
+
+#ifdef __NR_ptrace
+    // Block process tracing/debugging.
+    deny_syscall(ctx, SCMP_SYS(ptrace), "ptrace");
+#endif
+
+    // Load the filter into the kernel.
+    int rc = seccomp_load(ctx);
+    if (rc < 0) {
+        fprintf(stderr, "seccomp_load failed: %s\n", strerror(-rc));
+        seccomp_release(ctx);
+        return 1;
+    }
+
+    // Free the userspace libseccomp context.
+    seccomp_release(ctx);
+
+    // Replace this process with the target program.
     execvp(argv[1], &argv[1]);
+
+    // execvp only returns on error.
     perror("execvp");
     return 1;
 }
@@ -785,8 +918,10 @@ int main(int argc, char **argv) {
 Build it:
 
 ```bash
-sudo apt-get install -y libseccomp-dev
-gcc -o seccomp_exec seccomp_exec.c -lseccomp
+sudo apt-get install -y libseccomp-dev gcc
+gcc -static -O2 -o seccomp_exec seccomp_exec.c -lseccomp
+cp seccomp_exec alpine-rootfs/seccomp_exec
+chmod +x alpine-rootfs/seccomp_exec
 ```
 
 Get sample rootfs and copy seccomp inside:
@@ -801,7 +936,7 @@ cp seccomp_exec alpine-rootfs/seccomp_exec
 Run the "container" with seccomp policy:
 
 ```bash
-sudo unshare --pid --mount --uts --net --fork --mount-proc \
+sudo unshare --pid --mount --uts --net --fork --mount-proc=alpine-rootfs/proc \
     chroot alpine-rootfs /seccomp_exec /bin/sh
 
 # Inside
@@ -817,11 +952,15 @@ sudo unshare --pid --mount --uts --net --fork --mount-proc \
 
 ### AppArmor and SELinux — Mandatory Access Control
 
-Namespaces and capabilities cut down _which kernel features_ a container can call. **LSMs** further restrict _which files_ it can touch.
+Capabilities cut down _which kernel features_ a container can call. **LSMs** further restrict _which files_ it can touch.
+
+**Mandatory Access Control (MAC)** is the kernel-enforced layer that says "no, you can't do that" _regardless of file permissions or UID_. Standard UNIX permissions are **discretionary** — the file's owner can `chmod 777` it, and from then on anyone can read it. That's at the owner's discretion, hence DAC ("Discretionary Access Control"). MAC inverts the model: a system-wide policy, set by the administrator and loaded into the kernel, decides what each process is allowed to touch. The process's own UID cannot override it. The file's owner cannot override it. Even root, in many configurations, cannot override it without first loading a new policy.
+
+The practical consequence for containers: a process running as UID 0 with `CAP_DAC_OVERRIDE` (which can bypass file permissions) is still blocked by MAC from reading files the policy forbids. It's the layer that catches the case where every _other_ control has already been bypassed.
 
 Linux Security Modules (LSMs) add a second layer of "no, you can't do that" on top of file permissions and capabilities.
 
-**AppArmor** is _path-based_: "this process may read `/etc/*` but not `/root/*`".
+**AppArmor** is _path-based_: "this process may read `/etc/*` but not `/root/*`". It also handes capabilities, IPC, etc.
 
 - Default on Debian, Ubuntu, SUSE.
 - Docker ships a default profile (`docker-default`) for every container.
@@ -871,9 +1010,13 @@ ps -eZ | grep container
 
 You will need the `apparmor-utils` package for `aa-status`, `aa-exec`, `aa-genprof`, and `aa-logprof`. The kernel module is in every modern Ubuntu/Debian/SUSE kernel; the userland tools are separate.
 
-#### Example: Write our own AppArmor Policy
+> Note: `docker-default` apparmor policy is not stored on disk but generated - you can't easily `cat` it.
 
-Write a tiny profile that denies access to `/etc/shadow` and most of `/proc`. Save as `/etc/apparmor.d/tiny-container`:
+#### Example: Write our own AppArmor Policy to prevent Host ASLR Bypass
+
+We'll write a tiny profile and use it to block something the chroot can't: writing to `/proc/sys/kernel/randomize_va_space`. That file is a kernel pseudo-file, not a regular path — it's the same `/proc/sys/kernel/randomize_va_space` inside and outside the chroot, so namespaces and `chroot` don't shield it. A process with `CAP_SYS_ADMIN` (which our `sudo`-launched shell has) can disable ASLR for the entire host kernel from inside the "container". AppArmor is the layer that stops it.
+
+Save as `/etc/apparmor.d/tiny-container`:
 
 ```c
 #include <tunables/global>
@@ -881,31 +1024,36 @@ Write a tiny profile that denies access to `/etc/shadow` and most of `/proc`. Sa
 profile tiny-container flags=(attach_disconnected) {
     #include <abstractions/base>
 
-    # Allow basic shell behaviour
-    /bin/** ixr,
-    /usr/bin/** ixr,
-    /sbin/** ixr,
-    /lib/** mr,
-    /usr/lib/** mr,
-    /etc/** r,
-    /tmp/** rwk,
+    # Read broadly, execute where it makes sense
+    /** rmix,
 
-    # ... but explicitly deny the obvious targets
-    deny /etc/shadow rwklx,
-    deny /etc/sudoers rwklx,
-    deny /root/** rwklx,
+    # Self-inspection
+    /proc/[0-9]*/attr/current r,
 
-    # Kernel surfaces that show up in escape chains
-    deny /proc/sys/kernel/** w,
-    deny /proc/*/attr/** w,
-    deny /sys/fs/cgroup/** w,
-    deny capability sys_admin,
-    deny capability sys_module,
-    deny capability sys_ptrace,
+    # Allow writes inside the rootfs — EXCEPT under /proc and /sys.
+    /root/alpine-rootfs/[^ps]**     rwmix,
+    /root/alpine-rootfs/p[^r]**     rwmix,
+    /root/alpine-rootfs/pr[^o]**    rwmix,
+    /root/alpine-rootfs/s[^y]**     rwmix,
+    /root/alpine-rootfs/sy[^s]**    rwmix,
+    # (above globs allow everything in the rootfs whose path doesn't
+    #  start with /proc or /sys; those remain governed by the denies below)
+
+    # === The point of this profile ===
+    # Block writes to kernel-tunable pseudo-files, matched both as the
+    # path the process sees AND as the host-absolute path the kernel logs.
+    deny /proc/sys/kernel/**                          w,
+    deny /root/alpine-rootfs/proc/sys/kernel/**       w,
+    deny /proc/sys/vm/**                              w,
+    deny /root/alpine-rootfs/proc/sys/vm/**           w,
+    deny /proc/sysrq-trigger                          w,
+    deny /root/alpine-rootfs/proc/sysrq-trigger       w,
+    deny /sys/kernel/**                               w,
+    deny /root/alpine-rootfs/sys/kernel/**            w,
 }
 ```
 
-Load it and check:
+Load it:
 
 ```bash
 sudo apparmor_parser -r /etc/apparmor.d/tiny-container
@@ -913,28 +1061,60 @@ sudo aa-status | grep tiny-container
 # tiny-container
 ```
 
-Launch a new "container" with `unshare` and `aa-exec` userland helper:
+**A — Without the Profile, the "Container" Can Disable Host ASLR:**
 
 ```bash
-mkdir alpine-rootfs && cd alpine-rootfs
-wget -qO- https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.0-x86_64.tar.gz | sudo tar xz
-cd ..
-sudo unshare --pid --mount --uts --net --fork --mount-proc \
-    aa-exec -p tiny-container \
-    chroot alpine-rootfs /bin/sh
+# Plain unshare + chroot, no AppArmor
+sudo unshare --pid --mount --uts --net --fork --mount-proc=alpine-rootfs/proc chroot alpine-rootfs /bin/sh
 
-# Inside
-/ # cat /proc/1/attr/current
-# tiny-container (enforce)
+# cat /proc/sys/kernel/randomize_va_space
+# 2                                              <- full ASLR
+# echo 0 > /proc/sys/kernel/randomize_va_space
+# cat /proc/sys/kernel/randomize_va_space
+# 0                                              <- ASLR disabled, host-wide
+# exit
 
-/ # cat /etc/shadow
-# cat: can't open '/etc/shadow': Permission denied        <- AppArmor said no
-
-/ # cat /etc/hostname
-# my-tiny-container                                       <- allowed
+# Restore on the host
+sudo sh -c 'echo 2 > /proc/sys/kernel/randomize_va_space'
 ```
 
-The denial appears in `dmesg` on the host: `audit: type=1400 ... apparmor="DENIED" operation="open" profile="tiny-container" name="/etc/shadow"`. If you're tuning a profile, that's where the log entries live; `aa-logprof` reads them and helps you turn them into rules.
+The chroot and namespaces did nothing to stop this. The process is "inside a container", but its write went straight to the host kernel.
+
+**B — With the Profile, the Same Write Is Refused:**
+
+```bash
+sudo unshare --pid --mount --uts --net --fork --mount-proc=alpine-rootfs/proc \
+   chroot alpine-rootfs sh -c '
+      # Apply the profile on the next exec (kernel interface, bypasses aa-exec)
+      echo "exec tiny-container" > /proc/self/attr/apparmor/exec
+      exec /bin/sh
+   '
+
+# cat /proc/self/attr/current
+# tiny-container (enforce)                       <- profile is active
+
+# cat /proc/sys/kernel/randomize_va_space
+# 2                                              <- reads still allowed
+
+# echo 0 > /proc/sys/kernel/randomize_va_space
+# sh: can't create /proc/sys/kernel/randomize_va_space: Permission denied
+```
+
+Same chroot, same namespaces, same UID, same capabilities. The only difference is AppArmor — and the write is now refused.
+
+Watch the host's kernel log to see the denial:
+
+```bash
+sudo dmesg | tail -1
+# apparmor="DENIED" operation="open" profile="tiny-container"
+#   name="/proc/sys/kernel/randomize_va_space" requested_mask="w" ...
+```
+
+This is the line `aa-logprof` reads when you're tuning a profile — every refusal shows the exact path, operation, and required permission, so you know what to allow if you decide a denied access was legitimate.
+
+> **Note on `aa-exec`.** The canonical way to apply a profile is `aa-exec -p tiny-container -- /bin/sh`, but the `aa-exec` build shipping in Ubuntu 24.04 has a bug on kernels with namespaced LSM attr files — it writes to `/proc/self/attr/exec` instead of `/proc/self/attr/apparmor/exec` and reports a misleading "profile does not exist" error. We write to the kernel interface directly instead. This is what `runc` and every other real container runtime do internally; `aa-exec` is just a convenience wrapper.
+
+The lesson in this example is that AppArmor blocks **operations on the host kernel** that the chroot was never going to stop. Namespaces draw a filesystem boundary; AppArmor draws a kernel-surface boundary. They cover different things, and a real container runtime always uses both.
 
 ### Example: Docker `--privileged` flag
 
@@ -986,55 +1166,137 @@ To simplify these operations, enable user-friendly management and allow for pers
 - `docker` based on `containerd` and follows the same principle of operation
 - `proxmox` linux distribution for virtualization (uses `lxc` for containers)
 
-### Example: Container From Scratch
+### Example: Container From Scratch — All Six Layers By Hand
 
-This is the demo that ties everything together. We will build something that walks and quacks like a container, with no Docker involved, using only:
+This is the demo that ties everything together. We will build something that walks and quacks like a container, with no Docker involved, by composing all six kernel-level mechanisms we've met so far:
 
-- a rootfs (tarball of Alpine)
-- `unshare` to create namespaces
-- `chroot` to swap the rootfs
-- cgroup files to limit resources
+| Layer | Mechanism                              | Provided by                       |
+| ----- | -------------------------------------- | --------------------------------- |
+| 1     | Namespaces (PID, mount, UTS, net, IPC) | `unshare`                         |
+| 2     | Filesystem isolation                   | `chroot` + an Alpine rootfs       |
+| 3     | Resource limits                        | cgroup v2 files                   |
+| 4     | Capability restriction                 | `setpriv --bounding-set`          |
+| 5     | Syscall filtering                      | our `seccomp_exec` wrapper        |
+| 6     | Mandatory Access Control               | `tiny-container` AppArmor profile |
 
-> Note: we omit repeating apparmor, seccomp, and Linux capability examples here; refer to the code above.
+Each one was demonstrated in isolation earlier in this chapter. Now we compose them.
+
+> **Prerequisites from previous examples:**
+>
+> - `alpine-rootfs/` — the Alpine minirootfs tarball, unpacked
+> - `seccomp_exec` — the small C wrapper, built and copied into `alpine-rootfs/seccomp_exec`
+> - `/etc/apparmor.d/tiny-container` — the AppArmor profile, loaded with `apparmor_parser -r`
+
+**Step 1 — Sanity check that the prereqs are in place:**
 
 ```bash
-# 1. Grab a tiny rootfs (Alpine minirootfs, ~3 MB)
-mkdir alpine-rootfs && cd alpine-rootfs
-wget -qO- https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.0-x86_64.tar.gz | sudo tar xz
-cd ..
+ls alpine-rootfs/bin/sh
+ls alpine-rootfs/seccomp_exec
+sudo aa-status | grep tiny-container
+# tiny-container
+```
 
-# 2. Create new PID + mount + UTS + net namespaces, then chroot in
-sudo unshare --pid --mount --uts --net --fork --mount-proc \
-    chroot $PWD/alpine-rootfs /bin/sh
+**Step 2 — Start the "container" with all six layers:**
 
-# 3. We are "in the container"
-/ # echo "I am $(hostname) and PID is $$"
-# I am pop-os and PID is 1
-/ # hostname my-tiny-container
-/ # ps -ef
+```bash
+sudo unshare --pid --mount --uts --net --ipc --fork \
+    --mount-proc=alpine-rootfs/proc \
+    setpriv --bounding-set=-all,+net_bind_service,+sys_chroot \
+    chroot alpine-rootfs sh -c '
+        echo "exec tiny-container" > /proc/self/attr/apparmor/exec
+        exec /seccomp_exec /bin/sh
+    '
+```
+
+What that one command stacks, in order:
+
+1. `unshare` — new PID, mount, UTS, network, IPC namespaces. The new process becomes PID 1 in the new PID namespace; `/proc` is freshly mounted under the rootfs.
+2. `chroot` — pivots the filesystem so the Alpine rootfs becomes `/`.
+3. The shell inside writes to `/proc/self/attr/apparmor/exec` — queues the `tiny-container` profile to take effect on the next `execve()`.
+4. `setpriv --bounding-set=-all,+net_bind_service,+sys_chroot` — drops all capabilities except two.
+5. `setpriv --no-new-privs` — sets `NoNewPrivs=1`, so no setuid binary inside can regain privileges.
+6. `/seccomp_exec` — loads the seccomp filter that blocks `mount`, `kexec_load`, `init_module`, `ptrace`, etc.
+7. `execvp(/bin/sh)` — the shell starts. _At this point_ the queued AppArmor transition fires, capabilities have been restricted, NNP is set, and the seccomp filter is active.
+
+**Step 3 — Verify all six layers from inside:**
+
+```bash
+# hostname my-tiny-container
+# hostname
+# my-tiny-container
+
+# echo "I am $(hostname) and PID is $$"
+# I am my-tiny-container and PID is 1
+
+# ps -ef
 # PID   USER     COMMAND
 #     1 root     /bin/sh
 #     4 root     ps -ef
-/ # ip addr
-# 1: lo: <LOOPBACK> mtu 65536 ...
-#    (no eth0 — separate network namespace, no veth set up)
 
-# 4. From another host terminal: apply a memory limit via cgroup v2
-sudo mkdir /sys/fs/cgroup/tiny
-# Find the unshared PID from the host
-ps -ef | grep unshare
-# 17234 root unshare --pid --mount --uts --net --fork --mount-proc chroot ...
-sudo echo 17234 | sudo tee /sys/fs/cgroup/tiny/cgroup.procs
-sudo echo "128M" | sudo tee /sys/fs/cgroup/tiny/memory.max
+# grep -E 'Cap|Seccomp|NoNewPrivs' /proc/self/status
+# CapBnd:         0000000040040000          <- only the two we kept
+# NoNewPrivs:     1
+# Seccomp:        2                          <- filter mode
 
-# 5. Inside the "container", try to allocate 256M
-/ # dd if=/dev/zero of=/dev/null bs=1M count=256
-# Killed                              <- cgroup OOM-killed the process
+# cat /proc/self/attr/current
+# tiny-container (enforce)                   <- AppArmor profile active
 ```
 
-No Docker. No containerd. No runc. Just six kernel features composed by hand: namespaces, chroot, cgroups, capabilities (we inherited them from the parent shell), seccomp (off), and PID 1.
+All six layers visible at once. The container has:
 
-This is the whole magic trick. Everything Docker, Podman, containerd, runc and Kubernetes do is a more polished version of this script.
+- its own hostname (UTS ns), its own PID tree (PID ns), its own network stack (net ns), its own filesystem view (mount ns + chroot)
+- a stripped capability set
+- `NoNewPrivs=1`
+- a seccomp filter
+- an AppArmor profile in enforce mode
+
+**Step 4 — Apply a cgroup limit (from another host terminal):**
+
+```bash
+# Find the unshared PID on the host
+ps -ef | grep unshare
+# root  17234 ...  unshare --pid --mount ...
+
+sudo mkdir /sys/fs/cgroup/tiny
+sudo sh -c "echo 17234 > /sys/fs/cgroup/tiny/cgroup.procs"
+sudo sh -c "echo 128M > /sys/fs/cgroup/tiny/memory.max"
+```
+
+**:Step 5 — Verify each layer is actually doing something:**
+
+The "is it on?" checks above just prove the layers are _active_. To prove they're _enforcing_, try the operations each one is supposed to refuse:
+
+```bash
+# Capability denial — we dropped CAP_NET_ADMIN, so we can't change interfaces
+# ip link set lo down
+# RTNETLINK answers: Operation not permitted
+
+# Seccomp denial — our filter blocks mount(2)
+# mount -t tmpfs none /mnt
+# Bad system call (core dumped)              <- SIGSYS from the kernel
+
+# AppArmor denial — our profile blocks writes to /proc/sys/kernel
+# echo 0 > /proc/sys/kernel/randomize_va_space
+# sh: can't create /proc/sys/kernel/randomize_va_space: Permission denied
+
+# cgroup limit — already demonstrated above with dd
+```
+
+Four different boundaries, four different failure modes, four different denial messages. Each one is a kernel mechanism doing its job.
+
+Six kernel features composed by hand: namespaces (`unshare`), filesystem isolation (`chroot`), resource limits (cgroup v2 files), capabilities (`setpriv`), seccomp (our wrapper), AppArmor (the profile). That stack is, end to end, **what `docker run` builds for you in milliseconds.**
+
+There is no Docker daemon involved. There is no `containerd`. There is no `runc`. The runtime stack you saw at the top of the chapter exists to make these six steps convenient, reproducible, and orchestrated at scale — but the kernel mechanisms underneath are the ones we just composed by hand.
+
+Still:
+
+- **No user namespace.** Container root is still host root. A real container runtime would add `--user` mapping via `unshare -U` plus `/proc/self/uid_map`.
+- **No network connectivity.** We made a new network namespace, but didn't wire up a veth pair to the host bridge. The container can only talk to itself on loopback.
+- **No PID 1 reaper.** Our shell becomes PID 1 but doesn't reap orphaned children, doesn't forward signals to its children, and ignores SIGTERM by default. A real runtime uses `tini` or `dumb-init` (or `docker run --init`).
+- **No overlay filesystem.** Every byte of the Alpine rootfs is on disk for this one container. A real runtime would layer a writable overlay on top of a shared read-only image.
+- **Hand-tuned profiles.** Our capability set, seccomp filter, and AppArmor profile are illustrative, not minimal. A real runtime ships defaults developed through years of "what breaks vs what doesn't" testing across thousands of workloads.
+
+Each of those gaps is a feature a real runtime adds. None of them changes the fundamental architecture: **a container is a normal process that the kernel has been asked, layer by layer, to constrain.** The runtime is just the thing that makes asking convenient.
 
 ### How Docker Does It
 
