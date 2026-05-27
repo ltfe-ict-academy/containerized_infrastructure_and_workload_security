@@ -26,7 +26,8 @@ A practical orientated course on containerized infrastructure and workload secur
 4. [**Hardening & Defense-in-Depth**](./04_Hardening_and_Defense_in_Depth/README.md)
     - **Container hardening strategies**
     - **Managing Secrets in Containerized Environments**
-    - **Container Monitoring and Observability**
+    - **Hands On: Containers Hardening & Secrets Management**
+    - **Hands On: Container Monitoring And Observability**
 
 5. [**Defend The Flag**](./05_Defend_The_Flag/README.md)
     - **Defend The Flag challenge for securing the containers. Applying the lessons learnt in practice.**

@@ -37,4 +37,6 @@
 - Docker Compose secrets
 - Runtime retrieval from external secret stores
 
-## [Container Monitoring And Observability](./03_Container_Monitoring_and_Observability/README.md)
+## [Hands On: Containers Hardening & Secrets Management](./03_Hands_On_Container_Hardening_and_Secrets_Management/README.md)
+
+## [Hands On: Container Monitoring And Observability](./04_Hands_On_Container_Monitoring_and_Observability/README.md)
