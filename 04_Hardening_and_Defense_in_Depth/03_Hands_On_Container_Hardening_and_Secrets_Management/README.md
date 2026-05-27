@@ -1,564 +1,238 @@
-# Hands-On Example Stack
+# # Hands On: Containers Hardening & Secrets Management
 
-Part 04 turns the same catalog application into a hardened single-node deployment with practical observability.
+This version starts from the already image-hardened and network-hardened application. The public entry point is still the reverse proxy, and the segmented Docker networks from the previous chapter remain in place. The new work is runtime hardening: how the containers are started, what privileges they receive, where they can write, how they consume secrets, and how Docker decides whether each service is healthy.
 
-This part has two modes:
+## Quick start
 
-- `compose.attack.yaml` overlays intentionally weak settings onto the stack so participants can exploit the application in a controlled lab
-- `compose.yaml` is the hardened default build with secrets files, runtime restrictions, TLS at the edge, and a working monitoring and logging path
-
-## Learning Goals
-
-By the end of this hands-on section, participants should be able to:
-
-- exploit a weak web route and explain why the exploit worked
-- see the difference between image hardening and runtime hardening
-- move sensitive values from environment variables to files mounted as secrets
-- apply practical container runtime restrictions
-- stand up a single-node stack with metrics, logs, and a Grafana view into both
-
-
-
-
-
-## Example: Harden a real Docker Compose app
-Exercise
-
-Participants review a sample application and classify each value as:
-
-Secret
-Sensitive but not a secret
-Configuration
-Public metadata
-Unknown / requires policy decision
-
-
-Hands-on lab
-
-“Find the leaks” lab:
-
-Inspect a vulnerable Docker project.
-Search Git history for secrets.
-Inspect image history.
-Inspect runtime environment.
-Review Compose files.
-Review container logs.
-Produce a short risk report.
-
-Hands-on lab
-
-Refactor a Compose app that currently uses:
-
-environment:
-  DB_PASSWORD: supersecret
-
-into a safer design using:
-
-.env.example
-local-only ignored .env
-Compose secrets for sensitive values
-clear config/secret separation
-
-Hands-on lab
-
-Build a three-service application:
-
-web
-worker
-db
-
-Tasks:
-
-Create separate secrets for database password, API token, and admin bootstrap password.
-Grant each service only the secrets it needs.
-Modify application code to read from /run/secrets.
-Use _FILE style environment variables for images that support them.
-Verify secrets are not present in the Compose file or image history.
-
-Participants build an image that needs a private package token.
-
-Bad version:
-
-ARG NPM_TOKEN
-RUN npm config set //registry.npmjs.org/:_authToken=$NPM_TOKEN
-
-Secure version:
-
-RUN --mount=type=secret,id=npm_token \
-    NPM_TOKEN="$(cat /run/secrets/npm_token)" && \
-    npm config set //registry.npmjs.org/:_authToken="$NPM_TOKEN" && \
-    npm ci
-
-Participants then inspect:
-
-image history
-final filesystem
-build logs
-cache behavior
-
-
-Hands-on lab
-
-Modify a small Python/Node/Go service to:
-
-Read secrets from files.
-Avoid printing secret values in logs.
-Redact secrets in error output.
-Fail safely if a secret is missing.
-Support a restart-based rotation workflow.
-
-Participants compare four designs for the same Docker Compose app:
-
-Plain .env
-Compose secrets from local files
-Encrypted secrets in Git using SOPS
-Runtime fetch from an external secret manager
-
-They score each design against:
-
-developer usability
-production safety
-auditability
-rotation support
-failure modes
-operational complexity
-
-Create a CI workflow that:
-
-Builds a Docker image with BuildKit secrets.
-Runs a secret scan.
-Verifies no secret is present in the final image.
-Publishes only if checks pass.
-Uses environment-scoped secrets.
-
-A production database password was committed to Git and used in a Docker Compose deployment.
-
-Participants must decide:
-
-Is this an incident?
-What systems are affected?
-What needs to be rotated?
-What logs must be checked?
-What containers must be restarted?
-What evidence should be preserved?
-What long-term controls should be added?
-
-Capstone: harden a Docker Compose application
-
-Learning objectives
-
-Participants apply the whole course to a realistic project.
-
-Scenario
-
-A small company has a Docker Compose app with:
-
-web service
-background worker
-PostgreSQL
-Redis
-private package dependency
-third-party API token
-CI pipeline
-staging and production environments
-
-The current project contains secrets in:
-
-.env
-docker-compose.yml
-Dockerfile ARG
-CI logs
-image history
-app logs
-
-Capstone tasks
-
-Participants must:
-
-Create a secret inventory.
-Remove hardcoded secrets.
-Refactor runtime secrets into Docker Compose secrets.
-Refactor build credentials into BuildKit secrets.
-Add .env.example.
-Add .gitignore and .dockerignore controls.
-Add secret scanning.
-Add CI/CD masking and protected variables.
-Write a rotation runbook.
-Write a short team policy.
-
-Final deliverables
-
-Hardened docker-compose.yml
-Hardened Dockerfile
-Secret inventory
-Rotation runbook
-CI/CD pipeline snippet
-Risk assessment
-Short presentation explaining trade-offs
-
-
-
-
-
-
-
-## Final Architecture
-
-```text
-Browser
-  |
-  v
-edge-proxy (HTTP -> HTTPS redirect, TLS termination)
-  |
-  +--> frontend
-  +--> backend
-          |
-          +--> postgres
-          +--> redis
-          |
-          +--> metrics exposed to Prometheus
-
-Prometheus <-- backend metrics, cAdvisor
-Grafana    <-- Prometheus + Loki
-Alloy      <-- Docker logs -> Loki
-```
-
-## Folder Layout
-
-```text
-90_Hands_On_Example_Stack/
-|- README.md
-|- compose.yaml
-|- compose.attack.yaml
-|- .env.example
-|- .gitignore
-|- backend/
-|- frontend/
-|- edge/
-|- redis/
-|- db/
-|- monitoring/
-|  |- prometheus/
-|  |- loki/
-|  |- alloy/
-|  `- grafana/
-|- secrets/
-|  |- examples/
-|  `- runtime/
-|- certs/
-|  `- runtime/
-`- scripts/
-```
-
-## Step 1: Prepare The Environment File
-
-Linux or macOS:
+Create local lab secrets first:
 
 ```bash
-cp .env.example .env
+./scripts/create-local-secrets.sh
 ```
 
-PowerShell:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-## Step 2: Prepare The Training Secrets
-
-Linux or macOS:
+Then start the stack:
 
 ```bash
-./scripts/prepare-secrets.sh
+docker compose up --build
 ```
 
-PowerShell:
-
-```powershell
-./scripts/prepare-secrets.ps1
-```
-
-These commands copy training-only values from `secrets/examples/` into `secrets/runtime/`.
-
-Why we do it this way:
-
-- participants get runnable files
-- the runtime files are separated from the committed examples
-- the Compose stack can mount secrets as files
-
-## Step 3: Generate A Local TLS Certificate
-
-Linux or macOS:
-
-```bash
-./scripts/generate-dev-cert.sh
-```
-
-PowerShell:
-
-```powershell
-./scripts/generate-dev-cert.ps1
-```
-
-This creates local training certificates in `certs/runtime/`.
-
-The default host ports come from `.env`:
-
-- HTTPS: `8443`
-- HTTP redirect: `8080`
-- Grafana: `3000` on localhost only
-- Prometheus: `9090` on localhost only
-
-## Phase A: Run The Attack Overlay
-
-The attack overlay reintroduces a few intentionally weak behaviors:
-
-- debug routes enabled
-- unsafe SQL queries enabled
-- direct backend port published on `127.0.0.1:18000`
-- backend runtime restrictions relaxed so students can compare the difference
-
-### Step 4: Start The Vulnerable Overlay
-
-```bash
-docker compose -f compose.yaml -f compose.attack.yaml up --build -d
-```
-
-### Step 5: Confirm The Debug Route Is Reachable
-
-```bash
-curl http://127.0.0.1:18000/api/admin/debug
-```
-
-What to observe:
-
-- the route exists only because the overlay enabled it
-- the app is willing to disclose operational information that should never be exposed in production
-
-### Step 6: Exploit The Unsafe Search Query
-
-Run a normal query first:
-
-```bash
-curl "http://127.0.0.1:18000/api/products/search?q=red"
-```
-
-Now run a training SQL injection payload:
-
-```bash
-curl "http://127.0.0.1:18000/api/products/search?q=' UNION SELECT id, username, password_hash, 0 FROM app_users -- "
-```
-
-Why this works:
-
-- the vulnerable route interpolates user input directly into SQL
-- PostgreSQL receives attacker-controlled query structure, not just attacker-controlled data
-
-This is the point where participants should connect the web exploit to the surrounding container environment:
-
-- the application is weak
-- the backend container is now directly reachable
-- runtime hardening is reduced
-- the overall blast radius is larger than it should be
-
-### Step 7: Stop The Attack Overlay
-
-```bash
-docker compose -f compose.yaml -f compose.attack.yaml down
-```
-
-## Phase B: Start The Hardened Single-Node Stack
-
-### Step 8: Start The Hardened Default Stack
-
-```bash
-docker compose up --build -d
-```
-
-### Step 9: Access The Application Through The Edge
-
-- HTTPS app: <https://localhost:8443>
-- HTTP redirect entry: <http://localhost:8080>
-- Grafana: <http://127.0.0.1:3000>
-- Prometheus: <http://127.0.0.1:9090>
-
-Expected behavior:
-
-- HTTP redirects to HTTPS
-- the backend is no longer published directly
-- the debug route is disabled
-- the search route uses safe parameterized queries
-
-## Step 10: Verify The Hardening Choices
-
-Check the running services:
+Check service state:
 
 ```bash
 docker compose ps
 ```
 
-Inspect the backend environment:
+Open the app through the reverse proxy:
 
 ```bash
-docker compose exec backend env | sort
+http://127.0.0.1:8080
 ```
 
-What to notice:
-
-- the database password is no longer in the environment
-- Redis credentials are not exposed as environment variables either
-
-Test filesystem restrictions:
+The host and port can still be changed with non-sensitive environment variables:
 
 ```bash
-docker compose exec backend sh -c "touch /tmp/ok && touch /app/should-fail"
+PUBLISH_HOST=127.0.0.1 PUBLIC_PORT=8080 docker compose up --build
 ```
 
-Expected result:
+## What changed
 
-- writing to `/tmp` works because it is a tmpfs
-- writing to `/app` fails because the container uses a read-only root filesystem
+### Secrets are no longer stored in `.env`
 
-Check the runtime user:
+The starting example used `.env` values for the PostgreSQL and Redis passwords. That is convenient, but it is not a good place for secrets. Environment variables are easy to expose accidentally: they can appear in debug output, container inspection output, crash reports, stack traces, and careless logs. A `.env` file is also easy to copy, share, or commit by mistake.
 
-```bash
-docker compose exec backend id
-docker compose exec edge-proxy id
-docker compose exec frontend id
+We removed the real `.env` file from the final example and kept only `.env.example` with non-sensitive settings:
+
+```env
+COMPOSE_PROJECT_NAME=example_app_final
+POSTGRES_DB=courseapp
+POSTGRES_USER=courseapp
+PUBLISH_HOST=127.0.0.1
+PUBLIC_PORT=8080
 ```
 
-## Step 11: Verify The Application Behavior Changed
+The real passwords now live in files under `secrets/` and are mounted into the containers through Compose secrets:
 
-The hardened backend should reject the same attack route as data, not as SQL structure:
-
-```bash
-curl "https://localhost:8443/api/products/search?q=' UNION SELECT id, username, password_hash, 0 FROM app_users -- " -k
+```yaml
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
 ```
 
-The results should reflect a safe query path instead of leaking rows from `app_users`.
+Only the containers that need a secret receive it. The backend receives both passwords because it connects to PostgreSQL and Redis. PostgreSQL receives only the PostgreSQL password. Redis receives only the Redis password. The reverse proxy and frontend receive no secrets.
 
-The debug endpoint should now be disabled:
+This is a small but important change. A compromised frontend or proxy container should not automatically contain database credentials just because the application stack has them somewhere.
 
-```bash
-curl https://localhost:8443/api/admin/debug -k
+### The backend reads secrets from files
+
+The backend no longer receives a full `DATABASE_URL` or `REDIS_URL` containing passwords. Instead, it receives hostnames, ports, database names, and secret file paths:
+
+```yaml
+POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+REDIS_PASSWORD_FILE: /run/secrets/redis_password
 ```
 
-## Step 12: Explore The Monitoring And Logging Stack
+The application reads those files at startup and builds the connection strings internally. This keeps password values out of the Compose environment section and out of the debug route. The debug route is still disabled, but even if it is enabled for a lab discussion, it now reports secret sources rather than secret values.
 
-Prometheus scrapes:
+The backend health endpoint also changed. It now returns HTTP 503 when PostgreSQL or Redis is not reachable. A health endpoint that always returns 200 is useful only for checking whether the web framework is alive. In this example, the backend depends on the database and cache, so the health endpoint checks those dependencies too.
 
-- backend application metrics at `/metrics`
-- container runtime metrics from cAdvisor
+### PostgreSQL and Redis use secret files
 
-Alloy discovers Docker containers through the Docker socket and forwards their logs to Loki.
+PostgreSQL uses its `_FILE` environment variable convention:
 
-Grafana is pre-provisioned with:
-
-- a Prometheus data source
-- a Loki data source
-- a simple dashboard for app requests, latency, and container resource use
-
-Useful checks:
-
-```bash
-docker compose exec prometheus wget -qO- http://backend:8000/metrics | head
-docker compose logs alloy
-docker compose logs loki
+```yaml
+POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
 ```
 
-In Grafana:
+Redis does not support the same password-file convention in the same way, so the Redis container reads the secret file during startup, writes a small temporary config file under `/tmp`, and starts `redis-server` with that generated config. The config file exists only inside the container's temporary filesystem. The password is not placed in the Compose file and is not passed as a long command-line argument.
 
-1. open the provisioned dashboard
-2. generate a few product and search requests in the UI
-3. watch request counters and latency move
-4. open Explore and query logs by service label
+This is not the same as a dedicated enterprise secret manager, but it is a better local Compose pattern than placing passwords directly in `.env` or in `docker-compose.yaml`.
 
-## What We Hardened In Practice
+### Containers run as non-root where the workload allows it
 
-### Secrets Handling
+We explicitly set users for the application containers:
 
-We now mount passwords as files and read them from:
-
-- `/run/secrets/postgres_password`
-- `/run/secrets/app_db_password`
-- `/run/secrets/redis_password`
-- `/run/secrets/grafana_admin_password`
-
-That is a major improvement over plain environment-variable secrets.
-
-### Runtime Controls
-
-The hardened app-facing services use:
-
-- non-root users
-- `read_only: true`
-- `tmpfs` mounts for writable scratch paths
-- `cap_drop: [ALL]`
-- `security_opt: ["no-new-privileges=true"]`
-- `pids_limit`
-- health checks
-
-### Traffic Exposure
-
-Only the edge proxy is host-facing.
-
-Admin tools such as Grafana and Prometheus bind only to localhost by default.
-
-### Observability
-
-The stack now has a realistic minimum observability path:
-
-- application metrics
-- container metrics
-- centralized container logs
-- a dashboard and an explore workflow
-
-## What This Final Lab Is And Is Not
-
-This is a strong single-node training example. It is not a full production platform.
-
-It gives participants a realistic end state for:
-
-- one node
-- one app stack
-- one edge proxy
-- secrets handling
-- runtime restrictions
-- monitoring and logging
-
-It does not try to solve:
-
-- multi-node orchestration
-- distributed secret stores
-- HA databases
-- external certificate automation
-- enterprise policy enforcement pipelines
-
-Those are important topics, but they are beyond the scope of this week.
-
-## Suggested Final Exercises
-
-1. Add another backend endpoint and expose its metrics in Grafana.
-2. Tighten the edge proxy further by blocking the debug path explicitly even if the backend enables it.
-3. Move the HTTPS host port from `8443` to `443` and update the redirect behavior accordingly.
-4. Extend the dashboard with a panel for cache hit behavior or search latency.
-5. Write down which controls came from image security, which came from networking, and which came from runtime hardening.
-
-## Teardown
-
-```bash
-docker compose down
+```yaml
+user: "10001:10001"   # backend
+user: "65532:65532"   # nginx-based containers
+user: "999:999"       # Redis
 ```
 
-If you want to remove data and metrics volumes as well:
+The database container is left to its image entrypoint because PostgreSQL images often need to perform ownership and initialization work before dropping privileges internally. That exception is deliberate. Hardening should be strict, but it should also respect how the workload actually starts.
 
-```bash
-docker compose down -v
+Running as a non-root UID does not make a compromised container harmless. It does change the attacker's starting point. Instead of immediately landing as UID 0 inside the container, the attacker lands as a constrained application user that should only be able to access the paths intentionally assigned to that service.
+
+### New privileges are blocked
+
+Every service uses:
+
+```yaml
+security_opt:
+  - no-new-privileges:true
 ```
 
-By the end of Part 04, participants should see the full journey clearly:
+This prevents a process from gaining extra privileges through mechanisms such as setuid or setgid binaries. Running as a non-root user is good, but it is not enough if an image contains a helper binary that can elevate to effective root. `no-new-privileges` adds a runtime guardrail around that class of mistake.
 
-- Day 1 built the app
-- Day 2 cleaned up the images and exposed breakout mistakes
-- Day 3 fixed the network shape
-- Day 4 hardened the workload and made it observable
+### Capabilities are dropped
+
+Most services use:
+
+```yaml
+cap_drop:
+  - ALL
+```
+
+A normal web API, reverse proxy, static frontend, or cache service should not need kernel privileges such as mounting filesystems, changing routing tables, tracing other processes, loading kernel modules, or creating device nodes.
+
+The PostgreSQL service has a small exception:
+
+```yaml
+cap_add:
+  - CHOWN
+  - DAC_OVERRIDE
+  - FOWNER
+  - SETGID
+  - SETUID
+```
+
+Those capabilities are commonly needed by database entrypoints that initialize a data directory and then drop to a less-privileged database user. The important practice is not that every container must have exactly zero capabilities. The important practice is that capabilities are intentional. We start from `ALL` dropped and add back only the ones justified by the workload.
+
+### The root filesystem is read-only
+
+Every service uses:
+
+```yaml
+read_only: true
+```
+
+A running container should usually not need to modify the image filesystem. The image provides the application and its dependencies. Runtime state belongs in a database, a named volume, or a narrow temporary filesystem.
+
+With a read-only root filesystem, an attacker who compromises the app has fewer places to drop tools, overwrite application code, modify startup files, or persist inside the container filesystem.
+
+### Writable paths are explicit and temporary
+
+Some services need temporary write space. Nginx needs places for temporary request files and a PID file. Redis needs a temporary config file. Python may need `/tmp` for temporary operations. Instead of leaving the whole container filesystem writable, we added explicit `tmpfs` mounts:
+
+```yaml
+tmpfs:
+  - /tmp:size=64m,mode=1777
+```
+
+PostgreSQL also receives a temporary runtime socket directory:
+
+```yaml
+tmpfs:
+  - /var/run/postgresql:size=16m,mode=1777
+```
+
+A `tmpfs` mount exists only for the lifetime of the container. It is useful for runtime scratch space, but it should not be used for data that must survive restarts. PostgreSQL data still uses a named Docker volume:
+
+```yaml
+volumes:
+  - postgres_data:/var/lib/postgresql/data
+```
+
+### Resource limits were added
+
+A container that has no extra privileges can still harm the host by consuming shared resources. We added limits for memory, swap, CPU, process count, file descriptors, restart loops, and logs.
+
+Examples from the Compose file:
+
+```yaml
+mem_limit: 256m
+memswap_limit: 256m
+cpus: "1.00"
+pids_limit: 200
+ulimits:
+  nofile:
+    soft: 1024
+    hard: 4096
+restart: "on-failure:5"
+logging:
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+```
+
+These values are intentionally modest because this is a lab application. In a real deployment, the right values come from measurement under normal and peak load. The point is that limits should be chosen deliberately. Leaving them unlimited because the correct number is not yet known is still a security decision, and usually not a good one.
+
+### Docker's default seccomp and host security profiles stay enabled
+
+We did not add `seccomp=unconfined`, `apparmor=unconfined`, `privileged: true`, host PID mode, host network mode, host devices, or Docker socket mounts.
+
+That absence is part of the hardening. Container security is often weakened by runtime exceptions that were added to make an error disappear. In this example, the containers run with the default runtime isolation features instead of bypassing them.
+
+### Health checks were added for every service
+
+Health checks are not a monitoring stack. They are local readiness and liveness signals for the Compose environment. Monitoring and observability belong to a later chapter, but the runtime should still know whether a service is actually usable.
+
+We used tools already present in each image instead of adding `curl` or `wget`:
+
+- The reverse proxy and frontend use the `nginx` binary itself to validate configuration and check that the master process is alive.
+- The backend uses `backend/healthcheck.py`, a small Python standard-library script that calls `http://127.0.0.1:8000/api/health` and verifies that the JSON status is `ok`.
+- PostgreSQL uses `pg_isready`, which is already part of the PostgreSQL image.
+- Redis uses `redis-cli`, which is already part of the Redis image, and reads the password from `/run/secrets/redis_password`.
+
+The backend waits for healthy PostgreSQL and Redis. The reverse proxy waits for healthy frontend and backend. This prevents the proxy from being marked ready while the application behind it is still starting.
+
+## Local Compose secrets caveat
+
+For this lab, `scripts/create-local-secrets.sh` generates local files under `secrets/`. Those files are ignored by Git. They are created with permissions that keep the example runnable when containers are forced to run as non-root users.
+
+This is appropriate for a local Compose lab, not for production secret storage. In production, prefer a real secrets management system or an orchestrator-backed mechanism that can control encryption, rotation, access policy, audit logs, and ownership more precisely. Examples include cloud secret managers, Vault-style systems, Kubernetes Secrets with encryption at rest, or the Secrets Store CSI Driver.
+
+## Files changed or added
+
+- `docker-compose.yaml` adds runtime hardening, resource limits, service health checks, and Compose secrets.
+- `backend/app.py` reads database and Redis passwords from secret files and stops exposing connection URLs through debug output.
+- `backend/healthcheck.py` adds a dependency-aware backend health check without adding curl.
+- `backend/Dockerfile` copies the backend health check into the runtime image.
+- `frontend/nginx.conf` makes the frontend Nginx container compatible with a read-only root filesystem.
+- `frontend/Dockerfile` copies the frontend Nginx config.
+- `proxy/nginx.conf` makes the reverse proxy compatible with a read-only root filesystem.
+- `.env.example` now contains only non-sensitive configuration.
+- `.gitignore` ignores real local secret files.
+- `secrets/*.txt.example` documents the expected secret files without shipping real credentials.
+- `scripts/create-local-secrets.sh` creates local lab secrets.

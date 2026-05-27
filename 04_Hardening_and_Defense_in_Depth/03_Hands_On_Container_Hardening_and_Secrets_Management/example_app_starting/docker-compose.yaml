@@ -1,0 +1,95 @@
+services:
+  reverse-proxy:
+    image: dhi.io/nginx:1.31.0-debian13@sha256:07477e2829f4f800abcdf369a93c9e5ec5dc4b17b2b86deb44063414aec3cd16
+    ports:
+      - "${PUBLISH_HOST:-127.0.0.1}:${PUBLIC_PORT:-8080}:8080"
+    volumes:
+      - ./proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - public_net
+      - frontend_net
+      - backend_net
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: "/api"
+    expose:
+      - "8080"
+    depends_on:
+      - backend
+    networks:
+      - frontend_net
+
+  backend:
+    build:
+      context: ./backend
+      args:
+        UV_VERSION: "0.11.15"
+        UV_INDEX_URL: "https://pypi.org/simple"
+        APP_UID: "10001"
+        APP_GID: "10001"
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-courseapp}"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:-courseappredis}@redis:6379/0"
+      ENABLE_DEBUG_ROUTES: "false"
+    expose:
+      - "8000"
+    depends_on:
+      - db
+      - redis
+    networks:
+      - backend_net
+      - db_net
+      - cache_net
+
+  db:
+    image: dhi.io/postgres:18-alpine3.22@sha256:092b83bf7e7be059a662c4aa5987f0e0e4dc03a5ea7097ec4e05759de3f6d1b3
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-courseapp}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    networks:
+      - db_net
+
+  redis:
+    image: dhi.io/redis:8.6.3-debian13@sha256:db21f5e0bf266b9fbd8df9b7aef140785465f5330fdc86662ec960d10118cefe
+    command:
+      - redis-server
+      - --requirepass
+      - "${REDIS_PASSWORD:-courseappredis}"
+    expose:
+      - "6379"
+    networks:
+      - cache_net
+
+volumes:
+  postgres_data:
+
+networks:
+  public_net:
+    driver: bridge
+
+  frontend_net:
+    driver: bridge
+    internal: true
+
+  backend_net:
+    driver: bridge
+    internal: true
+
+  db_net:
+    driver: bridge
+    internal: true
+
+  cache_net:
+    driver: bridge
+    internal: true
