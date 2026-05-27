@@ -1,0 +1,20 @@
+# Allowlist only the files needed by this image build.
+**
+!Dockerfile
+!.dockerignore
+!package.json
+!package-lock.json
+!index.html
+!src/**
+
+# Extra deny rules for readability and future maintainers.
+.env
+.env.*
+.git
+.git/**
+node_modules
+node_modules/**
+dist
+dist/**
+coverage
+coverage/**
