@@ -51,7 +51,10 @@ services:
       - backend_net
 
   frontend:
-    image: leon11sj/course-frontend:1.0.0
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: "/api"
     init: true
     user: "65532:65532"
     read_only: true
@@ -80,7 +83,13 @@ services:
       - frontend_net
 
   backend:
-    image: leon11sj/course-backend:1.0.0
+    build:
+      context: ./backend
+      args:
+        UV_VERSION: "0.11.15"
+        UV_INDEX_URL: "https://pypi.org/simple"
+        APP_UID: "10001"
+        APP_GID: "10001"
     init: true
     user: "10001:10001"
     read_only: true

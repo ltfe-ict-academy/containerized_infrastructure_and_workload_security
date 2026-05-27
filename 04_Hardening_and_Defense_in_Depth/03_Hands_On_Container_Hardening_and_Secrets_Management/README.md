@@ -2,7 +2,7 @@
 
 This version starts from the already image-hardened and network-hardened application. The public entry point is still the reverse proxy, and the segmented Docker networks from the previous chapter remain in place. The new work is runtime hardening: how the containers are started, what privileges they receive, where they can write, how they consume secrets, and how Docker decides whether each service is healthy.
 
-## Quick start
+## Run the hardened stack
 
 Create local secrets first:
 
@@ -53,14 +53,6 @@ PUBLIC_PORT=8080
 ```
 
 The real passwords now live in files under `secrets/` and are mounted into the containers through Compose secrets:
-
-```yaml
-secrets:
-  postgres_password:
-    file: ./secrets/postgres_password.txt
-  redis_password:
-    file: ./secrets/redis_password.txt
-```
 
 Only the containers that need a secret receive it. The backend receives both passwords because it connects to PostgreSQL and Redis. PostgreSQL receives only the PostgreSQL password. Redis receives only the Redis password. The reverse proxy and frontend receive no secrets.
 
@@ -142,7 +134,7 @@ Those capabilities are commonly needed by database entrypoints that initialize a
 
 ### The root filesystem is read-only
 
-Every service uses:
+Some services uses:
 
 ```yaml
 read_only: true
@@ -225,16 +217,3 @@ For this lab, `scripts/create-local-secrets.sh` generates local files under `sec
 
 This is appropriate for a local Compose lab, not for production secret storage. In production, prefer a real secrets management system or an orchestrator-backed mechanism that can control encryption, rotation, access policy, audit logs, and ownership more precisely. Examples include cloud secret managers, Vault-style systems, Kubernetes Secrets with encryption at rest, or the Secrets Store CSI Driver.
 
-## Files changed or added
-
-- `docker-compose.yaml` adds runtime hardening, resource limits, service health checks, and Compose secrets.
-- `backend/app.py` reads database and Redis passwords from secret files and stops exposing connection URLs through debug output.
-- `backend/healthcheck.py` adds a dependency-aware backend health check without adding curl.
-- `backend/Dockerfile` copies the backend health check into the runtime image.
-- `frontend/nginx.conf` makes the frontend Nginx container compatible with a read-only root filesystem.
-- `frontend/Dockerfile` copies the frontend Nginx config.
-- `proxy/nginx.conf` makes the reverse proxy compatible with a read-only root filesystem.
-- `.env.example` now contains only non-sensitive configuration.
-- `.gitignore` ignores real local secret files.
-- `secrets/*.txt.example` documents the expected secret files without shipping real credentials.
-- `scripts/create-local-secrets.sh` creates local lab secrets.

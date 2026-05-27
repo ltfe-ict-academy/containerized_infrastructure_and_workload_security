@@ -37,7 +37,7 @@ if [ -f "$ACL_DEST" ]; then
 else
   redis_pw=$(tr -d '\n' < secrets/redis_password.txt)
   sed "s|YOUR_REDIS_PASSWORD_HERE|${redis_pw}|" "$ACL_SRC" > "$ACL_DEST"
-  chmod 0440 "$ACL_DEST"
+  chmod 0444 "$ACL_DEST"
   echo "Created Redis ACL file at $ACL_DEST"
 fi
 
