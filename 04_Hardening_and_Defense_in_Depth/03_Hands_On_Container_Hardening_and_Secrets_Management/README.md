@@ -1,37 +1,39 @@
-# # Hands On: Containers Hardening & Secrets Management
+## Hands On: Containers Hardening & Secrets Management
 
 This version starts from the already image-hardened and network-hardened application. The public entry point is still the reverse proxy, and the segmented Docker networks from the previous chapter remain in place. The new work is runtime hardening: how the containers are started, what privileges they receive, where they can write, how they consume secrets, and how Docker decides whether each service is healthy.
 
 ## Quick start
 
-Create local lab secrets first:
+Create local secrets first:
 
 ```bash
+chmod +x ./scripts/create-local-secrets.sh
 ./scripts/create-local-secrets.sh
 ```
+
+Copy the `.env.example` file to `.env` and change any non-sensitive values if desired.
 
 Then start the stack:
 
 ```bash
-docker compose up --build
+sudo docker compose up --build
 ```
 
 Check service state:
 
 ```bash
-docker compose ps
+sudo docker compose ps
 ```
 
 Open the app through the reverse proxy:
-
 ```bash
-http://127.0.0.1:8080
+http://<PUBLISH_HOST>:<PUBLIC_PORT>
 ```
 
-The host and port can still be changed with non-sensitive environment variables:
+Stop the stack when done:
 
 ```bash
-PUBLISH_HOST=127.0.0.1 PUBLIC_PORT=8080 docker compose up --build
+sudo docker compose down -v
 ```
 
 ## What changed

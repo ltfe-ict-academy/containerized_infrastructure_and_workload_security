@@ -1,0 +1,15 @@
+[project]
+name = "course-image-hardening-backend"
+version = "0.1.0"
+description = "FastAPI backend used in the image hardening lab."
+requires-python = ">=3.13,<3.15"
+dependencies = [
+  "fastapi==0.115.6",
+  "psycopg[binary]==3.2.10",
+  "redis==5.2.1",
+  "SQLAlchemy==2.0.36",
+  "uvicorn[standard]==0.34.0",
+]
+
+[tool.uv]
+package = false

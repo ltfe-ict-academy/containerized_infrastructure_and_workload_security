@@ -1,0 +1,6 @@
+.env
+secrets/*.txt
+redis_users.acl
+!secrets/*.txt.example
+__pycache__/
+*.pyc

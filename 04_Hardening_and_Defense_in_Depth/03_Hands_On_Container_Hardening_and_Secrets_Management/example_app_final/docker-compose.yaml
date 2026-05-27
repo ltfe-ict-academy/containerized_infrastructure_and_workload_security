@@ -1,0 +1,245 @@
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-web-healthcheck: &web-healthcheck
+  test: ["CMD", "nginx", "-t", "-q"]
+  interval: 30s
+  timeout: 5s
+  retries: 3
+  start_period: 10s
+
+services:
+  reverse-proxy:
+    image: dhi.io/nginx:1.31.0-debian13@sha256:07477e2829f4f800abcdf369a93c9e5ec5dc4b17b2b86deb44063414aec3cd16
+    init: true
+    user: "65532:65532"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${PUBLISH_HOST:-127.0.0.1}:${PUBLIC_PORT:-8080}:8080"
+    volumes:
+      - ./proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /var/cache/nginx:size=64m,mode=1777
+      - /run/nginx:size=16m,mode=1777
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: "0.50"
+    pids_limit: 100
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 4096
+    restart: "on-failure:5"
+    logging: *default-logging
+    healthcheck: *web-healthcheck
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - public_net
+      - frontend_net
+      - backend_net
+
+  frontend:
+    image: leon11sj/course-frontend:1.0.0
+    init: true
+    user: "65532:65532"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    expose:
+      - "8080"
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /var/cache/nginx:size=64m,mode=1777
+      - /run/nginx:size=16m,mode=1777
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: "0.50"
+    pids_limit: 100
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 4096
+    restart: "on-failure:5"
+    logging: *default-logging
+    healthcheck: *web-healthcheck
+    networks:
+      - frontend_net
+
+  backend:
+    image: leon11sj/course-backend:1.0.0
+    init: true
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-courseapp}
+      POSTGRES_USER: ${POSTGRES_USER:-courseapp}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      ENABLE_DEBUG_ROUTES: "false"
+    secrets:
+      - postgres_password
+      - redis_password
+    expose:
+      - "8000"
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: "1.00"
+    pids_limit: 200
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 4096
+    restart: "on-failure:5"
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend_net
+      - db_net
+      - cache_net
+
+  db:
+    image: dhi.io/postgres:18-alpine3.22@sha256:092b83bf7e7be059a662c4aa5987f0e0e4dc03a5ea7097ec4e05759de3f6d1b3
+    init: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PGDATA: /var/lib/postgresql/18/data
+      POSTGRES_DB: ${POSTGRES_DB:-courseapp}
+      POSTGRES_USER: ${POSTGRES_USER:-courseapp}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: "1.00"
+    pids_limit: 200
+    ulimits:
+      nofile:
+        soft: 2048
+        hard: 8192
+    restart: "on-failure:5"
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - db_net
+
+  redis:
+    image: dhi.io/redis:8.6.3-debian13@sha256:db21f5e0bf266b9fbd8df9b7aef140785465f5330fdc86662ec960d10118cefe
+    init: true
+    user: "999:999"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    secrets:
+      - redis_users_acl
+    volumes:
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    entrypoint: ["redis-server"]
+    command: ["/usr/local/etc/redis/redis.conf"]
+    expose:
+      - "6379"
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: "0.50"
+    pids_limit: 100
+    ulimits:
+      nofile:
+        soft: 10032
+        hard: 20064
+    restart: "on-failure:5"
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "127.0.0.1", "--user", "healthcheck", "--pass", "healthcheck", "PING"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - cache_net
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+  redis_users_acl:
+    file: ./secrets/redis_users.acl
+
+volumes:
+  postgres_data:
+
+networks:
+  public_net:
+    driver: bridge
+
+  frontend_net:
+    driver: bridge
+    internal: true
+
+  backend_net:
+    driver: bridge
+    internal: true
+
+  db_net:
+    driver: bridge
+    internal: true
+
+  cache_net:
+    driver: bridge
+    internal: true
