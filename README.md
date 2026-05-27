@@ -16,7 +16,7 @@ A practical orientated course on containerized infrastructure and workload secur
     - **Container Registries And Supply Chain Attacks**
     - **Exploiting Web Apps, The Poster Child For Cloud Services**
 
-3. [**Container & Linux Networking**](./03_Container_and_Linux_Networking/README.md)
+3. [**Container & Linux Networking**](./03_Container_and_Linux_networking/README.md)
     - **Introduction to Linux Networking for Containers**
     - **Iptables and basics of the Linux kernel firewall**
     - **Docker networks, overlays, DNS**
