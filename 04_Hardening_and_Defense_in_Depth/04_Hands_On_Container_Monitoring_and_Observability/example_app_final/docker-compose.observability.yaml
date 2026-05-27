@@ -1,0 +1,302 @@
+# Observability overlay for the hardened training application.
+# Start together with the original app:
+#   docker compose -f docker-compose.yaml -f docker-compose.observability.yaml up -d --build
+
+services:
+  grafana:
+    image: ${GRAFANA_IMAGE:-grafana/grafana:latest}
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${OBS_BIND:-127.0.0.1}:${GRAFANA_PORT:-3001}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-course-observe-change-me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/container-operations.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    networks:
+      - observability_net
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:latest}
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${OBS_BIND:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-7d}
+      - --web.enable-lifecycle
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - cadvisor
+      - node-exporter
+      - blackbox-exporter
+      - alloy
+    networks:
+      - observability_net
+      - public_net
+
+  cadvisor:
+    image: ${CADVISOR_IMAGE:-gcr.io/cadvisor/cadvisor:latest}
+    init: true
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "${OBS_BIND:-127.0.0.1}:${CADVISOR_PORT:-8081}:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    networks:
+      - observability_net
+
+  node-exporter:
+    image: ${NODE_EXPORTER_IMAGE:-prom/node-exporter:latest}
+    init: true
+    restart: unless-stopped
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - observability_net
+
+  blackbox-exporter:
+    image: ${BLACKBOX_EXPORTER_IMAGE:-prom/blackbox-exporter:latest}
+    init: true
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/blackbox_exporter/config.yml
+    volumes:
+      - ./observability/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    networks:
+      - observability_net
+      - public_net
+
+  loki:
+    image: ${LOKI_IMAGE:-grafana/loki:latest}
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${OBS_BIND:-127.0.0.1}:${LOKI_PORT:-3100}:3100"
+    command:
+      - -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./observability/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    networks:
+      - observability_net
+
+  tempo:
+    image: ${TEMPO_IMAGE:-grafana/tempo:latest}
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${OBS_BIND:-127.0.0.1}:${TEMPO_PORT:-3200}:3200"
+    command:
+      - -config.file=/etc/tempo/tempo.yaml
+    volumes:
+      - ./observability/tempo/tempo.yml:/etc/tempo/tempo.yaml:ro
+      - tempo_data:/tmp/tempo
+    networks:
+      - observability_net
+
+  alloy:
+    image: ${ALLOY_IMAGE:-grafana/alloy:latest}
+    init: true
+    restart: unless-stopped
+    user: "0:0"
+    ports:
+      - "${OBS_BIND:-127.0.0.1}:${ALLOY_PORT:-12345}:12345"
+      - "${OBS_BIND:-127.0.0.1}:${OTLP_GRPC_PORT:-4317}:4317"
+      - "${OBS_BIND:-127.0.0.1}:${OTLP_HTTP_PORT:-4318}:4318"
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - alloy_data:/var/lib/alloy/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+    depends_on:
+      - loki
+      - tempo
+    networks:
+      - observability_net
+
+  falco:
+    image: ${FALCO_IMAGE:-falcosecurity/falco:0.44.0}
+    init: true
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_ADMIN
+      - SYS_RESOURCE
+      - SYS_PTRACE
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - /sys/kernel/tracing:/sys/kernel/tracing:ro
+      - /var/run/docker.sock:/host/var/run/docker.sock:ro
+      - /proc:/host/proc:ro
+      - /etc:/host/etc:ro
+      - ./observability/falco/rules/local_rules.yaml:/etc/falco/rules.d/local_rules.yaml:ro
+    command:
+      - falco
+      - -o
+      - json_output=true
+      - -o
+      - json_include_output_property=true
+      - -o
+      - json_include_tags_property=true
+      - -o
+      - stdout_output.enabled=true
+      - -o
+      - syslog_output.enabled=false
+      - -o
+      - file_output.enabled=false
+    depends_on:
+      - alloy
+    networks:
+      - observability_net
+
+  docker-events:
+    image: ${DOCKER_CLI_IMAGE:-docker:cli}
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      - sh
+      - -c
+      - |
+        echo '{"source":"docker-events","message":"docker event stream started"}'
+        docker events --format '{{json .}}'
+    depends_on:
+      - alloy
+    networks:
+      - observability_net
+
+  dockhand:
+    image: ${DOCKHAND_IMAGE:-fnsys/dockhand:latest}
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${OBS_BIND:-127.0.0.1}:${DOCKHAND_PORT:-3002}:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - dockhand_data:/app/data
+    networks:
+      - observability_net
+
+  portainer:
+    image: ${PORTAINER_IMAGE:-portainer/portainer-ce:latest}
+    profiles:
+      - portainer
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${OBS_BIND:-127.0.0.1}:${PORTAINER_PORT:-9443}:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    networks:
+      - observability_net
+
+  beyla-backend:
+    image: ${BEYLA_IMAGE:-grafana/beyla:latest}
+    profiles:
+      - beyla
+    init: true
+    restart: unless-stopped
+    pid: "service:backend"
+    privileged: true
+    environment:
+      BEYLA_OPEN_PORT: "8000"
+      BEYLA_LOG_LEVEL: "INFO"
+      BEYLA_PROMETHEUS_PORT: "9090"
+      BEYLA_PROMETHEUS_PATH: "/metrics"
+      BEYLA_PROMETHEUS_FEATURES: "application,application_process,application_service_graph"
+      OTEL_SERVICE_NAME: "course-backend"
+      OTEL_RESOURCE_ATTRIBUTES: "deployment.environment=training,service.namespace=container-security"
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://alloy:4317"
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "grpc"
+    depends_on:
+      - backend
+      - alloy
+    networks:
+      - observability_net
+
+  trace-generator:
+    image: ${TELEMETRYGEN_IMAGE:-ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen:latest}
+    profiles:
+      - trace-test
+    command:
+      - traces
+      - --otlp-endpoint=alloy:4317
+      - --otlp-insecure
+      - --service=course-synthetic-client
+      - --duration=5m
+      - --rate=1
+    depends_on:
+      - alloy
+    networks:
+      - observability_net
+
+  falco-event-generator:
+    image: ${FALCO_EVENT_GENERATOR_IMAGE:-falcosecurity/event-generator:latest}
+    profiles:
+      - falco-test
+    command:
+      - run
+      - syscall
+      - --loop
+    depends_on:
+      - falco
+    networks:
+      - observability_net
+
+volumes:
+  grafana_data:
+  prometheus_data:
+  loki_data:
+  tempo_data:
+  alloy_data:
+  dockhand_data:
+  portainer_data:
+
+networks:
+  observability_net:
+    driver: bridge

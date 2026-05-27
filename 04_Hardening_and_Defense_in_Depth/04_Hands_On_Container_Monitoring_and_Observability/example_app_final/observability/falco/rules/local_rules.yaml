@@ -1,0 +1,16 @@
+# Local Falco rules for the training lab.
+# They are intentionally simple and generate readable alerts for Grafana Loki timelines.
+
+- rule: Training Shell Spawned In Container
+  desc: A shell was spawned inside a container. In production this is often an investigation trigger unless it is part of a controlled debug workflow.
+  condition: spawned_process and container.id != host and proc.name in (bash, sh, ash, dash, zsh)
+  output: Shell spawned inside container (user=%user.name uid=%user.uid command=%proc.cmdline container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: WARNING
+  tags: [container, shell, mitre_execution, training]
+
+- rule: Training Sensitive File Read In Container
+  desc: A process inside a container read a sensitive Linux identity or credential file.
+  condition: open_read and container.id != host and fd.name in (/etc/shadow, /etc/sudoers, /etc/passwd)
+  output: Sensitive file read inside container (user=%user.name command=%proc.cmdline file=%fd.name container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: WARNING
+  tags: [container, credential_access, training]

@@ -1,0 +1,42 @@
+groups:
+  - name: container-security-and-operations
+    rules:
+      - alert: AppHttpProbeFailing
+        expr: probe_success{job="app-http-probes"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          signal: availability
+        annotations:
+          summary: "Application HTTP probe is failing"
+          description: "The blackbox probe for {{ $labels.instance }} has failed for at least one minute."
+
+      - alert: ContainerHighCpu
+        expr: sum by (name) (rate(container_cpu_usage_seconds_total{name!="", image!=""}[5m])) > 0.80
+        for: 5m
+        labels:
+          severity: warning
+          signal: resource
+        annotations:
+          summary: "Container CPU usage is high"
+          description: "Container {{ $labels.name }} is using sustained CPU. Check whether this is expected load or resource abuse."
+
+      - alert: ContainerMemoryNearLimit
+        expr: (container_memory_working_set_bytes{name!="", image!=""} / container_spec_memory_limit_bytes{name!="", image!=""}) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          signal: resource
+        annotations:
+          summary: "Container memory is near its configured limit"
+          description: "Container {{ $labels.name }} is above 85% of its memory limit."
+
+      - alert: ContainerRecentlyRestarted
+        expr: (time() - container_start_time_seconds{name!="", image!=""}) < 300
+        for: 0m
+        labels:
+          severity: info
+          signal: change
+        annotations:
+          summary: "Container restarted recently"
+          description: "Container {{ $labels.name }} started less than five minutes ago. Correlate with Docker events and Falco alerts."

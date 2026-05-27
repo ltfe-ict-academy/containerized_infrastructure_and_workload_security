@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: container-security-course
+    orgId: 1
+    folder: Container Security Lab
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

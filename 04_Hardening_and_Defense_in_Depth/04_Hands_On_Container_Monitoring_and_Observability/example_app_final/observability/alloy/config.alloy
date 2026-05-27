@@ -1,0 +1,107 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// Discover all local Docker containers. Alloy reads container logs through the Docker API.
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+// Convert Docker metadata labels into stable Loki labels that are useful in Grafana.
+discovery.relabel "docker_containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_image"]
+    target_label  = "image"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_id"]
+    target_label  = "container_id"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.docker_containers.output
+  labels     = { source = "docker" }
+  forward_to = [loki.write.local.receiver]
+}
+
+// Docker daemon logs from systemd-journald. On non-systemd hosts this source may be empty.
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "priority"
+  }
+}
+
+loki.source.journal "docker_daemon" {
+  forward_to     = [loki.write.local.receiver]
+  relabel_rules  = loki.relabel.journal.rules
+  matches        = "_SYSTEMD_UNIT=docker.service"
+  max_age        = "24h"
+  format_as_json = true
+  labels         = { service = "docker-daemon", source = "journald" }
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+
+// OTLP trace receiver for instrumented applications and the optional trace-generator service.
+otelcol.receiver.otlp "default" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+
+  output {
+    traces = [otelcol.processor.batch.traces.input]
+  }
+}
+
+otelcol.processor.batch "traces" {
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "tempo:4317"
+    tls {
+      insecure = true
+    }
+  }
+}
