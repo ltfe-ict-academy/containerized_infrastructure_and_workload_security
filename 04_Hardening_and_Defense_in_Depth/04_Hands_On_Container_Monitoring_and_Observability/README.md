@@ -1,4 +1,4 @@
-# Container Monitoring And Observability
+# Hands On: Container Monitoring And Observability
 
 While hardening limits the blast radius and secrets management secures the keys to the infrastructure, neither can thwart a sophisticated threat if defenders are blind to the activity within their cluster. Effective security requires the ability to answer critical questions during an incident: what is happening right now, which services are being abused, and where did the malicious traffic flow? This module explores monitoring and observability not just as tools for uptime, but as essential security telemetry. By establishing deep visibility into containerized environments, you empower defenders to detect the subtle shifts in behavior that distinguish a routine reliability issue from a targeted breach.
 
