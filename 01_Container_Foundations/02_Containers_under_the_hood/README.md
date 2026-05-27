@@ -1303,20 +1303,20 @@ Each of those gaps is a feature a real runtime adds. None of them changes the fu
 When you type `docker run -d --name web --rm nginx:1.27`, a surprising number of things happen. None of them are magic. All of them are normal Linux features.
 
 ```text
-   you  -->  docker CLI  --HTTP-->  dockerd  --gRPC-->  containerd
-                                                          |
-                                                          v
-                                                  containerd-shim
-                                                          |
-                                                          v
-                                                        runc
-                                                          |
-                                                          v
-                          unshare() + clone() + setns()  +  pivot_root()
-                          + cgroup write  +  caps drop  +  seccomp  +  LSM
-                                                          |
-                                                          v
-                                                  /bin/sh  (PID 1 in the new namespaces)
+   you  -->  docker CLI  --HTTP-->  dockerd  --gRPC-->  containerd (container lifecycle management)
+                                                            |
+                                                            v
+                                                   containerd-shim (independent container parent process)
+                                                            |
+                                                            v
+                                                         runc (low-level OCI runtime, handles the kernel primitives)
+                                                            |
+                                                            v
+                           unshare() + clone() + setns()  +  pivot_root()
+                           + cgroup write  +  caps drop  +  seccomp  +  LSM
+                                                            |
+                                                            v
+                                                   /bin/sh  (PID 1 in the new namespaces)
 ```
 
 The runtime stack is layered. Each layer has one job:
