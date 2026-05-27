@@ -1,0 +1,68 @@
+services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy
+    container_name: socket-proxy
+    restart: unless-stopped
+    environment:
+      # Required for Dockhand core functionality
+      - CONTAINERS=1
+      - IMAGES=1
+      - NETWORKS=1
+      - VOLUMES=1
+      - EVENTS=1
+      - POST=1
+      - DELETE=1
+      # Required for dashboard host info and disk usage
+      - INFO=1
+      - SYSTEM=1
+      # Required for vulnerability scanning
+      - ALLOW_START=1
+      - ALLOW_STOP=1
+      - ALLOW_RESTARTS=1
+      # Optional: enable for terminal access
+      # - EXEC=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - socket-proxy
+
+  dockhand:
+    image: fnsys/dockhand:latest
+    container_name: dockhand
+    restart: unless-stopped
+    depends_on:
+      - socket-proxy
+    volumes:
+      - dockhand_data:/app/data
+    networks:
+      - socket-proxy
+      - dockhand_internal
+
+  nginx-dockhand:
+    build:
+      context: ./nginx-dockhand
+      dockerfile: Dockerfile
+    container_name: nginx-dockhand
+    restart: unless-stopped
+    depends_on:
+      - dockhand
+    ports:
+      - "${PUBLIC_BIND_IP:-127.0.0.1}:${DOCKHAND_EXPOSED_PORT:-3003}:80"
+    environment:
+      - DOCKHAND_AUTH_USER=${DOCKHAND_AUTH_USER:?DOCKHAND_AUTH_USER must be set}
+      - DOCKHAND_AUTH_PASSWORD=${DOCKHAND_AUTH_PASSWORD:?DOCKHAND_AUTH_PASSWORD must be set}
+    networks:
+      - dockhand_internal
+      - observability_net
+
+networks:
+  socket-proxy:
+    internal: true
+  dockhand_internal:
+    internal: true
+  observability_net:
+    driver: bridge
+    external: true
+
+volumes:
+  dockhand_data:

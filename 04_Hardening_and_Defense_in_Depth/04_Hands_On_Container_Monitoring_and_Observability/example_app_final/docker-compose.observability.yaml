@@ -209,17 +209,7 @@ services:
     networks:
       - observability_net
 
-  dockhand:
-    image: ${DOCKHAND_IMAGE:-fnsys/dockhand:latest}
-    init: true
-    restart: unless-stopped
-    ports:
-      - "${OBS_BIND:-127.0.0.1}:${DOCKHAND_PORT:-3002}:3000"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - dockhand_data:/app/data
-    networks:
-      - observability_net
+
 
   portainer:
     image: ${PORTAINER_IMAGE:-portainer/portainer-ce:latest}
@@ -294,9 +284,10 @@ volumes:
   loki_data:
   tempo_data:
   alloy_data:
-  dockhand_data:
   portainer_data:
 
 networks:
   observability_net:
+    driver: bridge
+  public_net:
     driver: bridge

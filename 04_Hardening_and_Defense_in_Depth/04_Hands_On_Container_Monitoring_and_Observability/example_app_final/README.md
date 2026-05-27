@@ -67,9 +67,7 @@ Beyla or OTLP traces               -> Alloy -> Tempo -> Grafana
 
 This is also how many real investigations work. A Prometheus alert tells us there is a symptom. Loki tells us what happened around that time. Docker events tell us what the runtime changed. Falco tells us whether behavior looked suspicious. Tempo tells us where request time was spent.
 
-## Start The Lab
-
-Presequisites:
+## Presequisites
 ```bash
 # Create and edit the .env file
 cp .env.example .env
@@ -87,6 +85,54 @@ sudo docker compose -f docker-compose.yaml logs -f
 # Try if the app is working
 ```
 
+Create the observability network:
+```bash
+cd observability
+
+sudo docker network create observability_net
+```
+
+<!-- TODO: Write this better -->
+Edit the `.env` in the observability directory
+
+
+## Container inspection and management with Dockerhaed
+
+Tools such as Portainer and Dockhand provide a graphical control plane for container environments. They can make it easier to see containers, images, volumes, networks, stacks, logs, resource usage, and deployment state from one place. **[Portainer](https://www.portainer.io/)** supports Docker, Kubernetes, Docker Swarm, Podman, and ACI environments, and exposes management features through a GUI and API.
+
+From a security perspective, these tools must be treated as administrative interfaces, not simple dashboards. A container management UI often has the ability to start containers, stop containers, open shells, view logs, edit stacks, change environment variables, and interact with images, volumes, and networks. That means it should be protected with strong authentication, least-privilege access, audit logging, regular updates, network restrictions, and preferably exposure only through a VPN, private admin network, or trusted reverse proxy.
+
+**[Dockhand](https://dockhand.pro/)** is a modern Docker management application focused on real-time container management, Docker Compose stack orchestration, and multi-environment support. It includes features such as starting and stopping containers, visual Compose editing, Git-based stack deployment, remote Docker host management, terminal access, real-time logs, vulnerability scanning, and container activity tracking.
+
+Start deploying the observability services:
+```bash
+# Run Dockhand container
+cat docker-compose.dockhand.yaml
+sudo docker compose -f docker-compose.dockhand.yaml up -d
+sudo docker compose -f docker-compose.dockhand.yaml logs -f
+
+# Go to http://{PUBLIC_BIND_IP}:3003/ and log in with the credentials from the .env file.
+```
+
+After starting the stack, configure Dockhand to use the proxy:
+- Go to Settings > Environments
+- Add a new environment or edit the default one
+- Set connection type to Direct
+- Set the host to `socket-proxy:2375`
+- Save the environment
+
+To enable vulnerability scanning, follow the [instructions in the Dockhand documentation](https://dockhand.pro/manual/#images-scan).
+
+## Cleaning
+```bash
+# Stop and remove the Dockhand container
+sudo docker compose -f docker-compose.dockhand.yaml down -v
+# Remove the observability network
+sudo docker network rm observability_net
+```
+
+
+# OTHER
 Start the observability stack with the `beyla` profile:
 
 ```bash
