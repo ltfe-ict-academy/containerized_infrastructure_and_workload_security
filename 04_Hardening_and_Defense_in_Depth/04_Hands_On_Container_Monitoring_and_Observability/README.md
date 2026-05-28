@@ -165,6 +165,24 @@ sudo docker compose -f docker-compose.node-exporter.yaml logs -f
 
 After starting the stack wait a few moments for the services to initialize, then open Grafana at `http://{PUBLIC_BIND_IP}:3001/` and check the `Node Exporter: Host Metrics` dashboard.
 
+## Exporting container metrics with cAdvisor
+
+[cAdvisor](https://github.com/google/cadvisor) (Container Advisor) provides container users an understanding of the resource usage and performance characteristics of their running containers. It is a running daemon that collects, aggregates, processes, and exports information about running containers. Specifically, for each container it keeps resource isolation parameters, historical resource usage, histograms of complete historical resource usage and network statistics. This data is exported by container and machine-wide.
+
+cAdvisor has native support for Docker containers and should support just about any other container type out of the box.
+
+To run the stack follow the instructions bellow:
+```bash
+# Check the docker-compose file
+cat docker-compose.cadvisor.yaml
+# Start cAdvisor
+sudo docker compose -f docker-compose.cadvisor.yaml up -d
+# Check the logs
+sudo docker compose -f docker-compose.cadvisor.yaml logs -f
+```
+
+After starting the stack wait a few moments for the services to initialize, then open Grafana at `http://{PUBLIC_BIND_IP}:3001/` and check the `cAdvisor: Container Metrics` dashboard.
+
 ## Cleaning
 ```bash
 # Stop and remove the Dockhand container
