@@ -207,6 +207,8 @@ sudo docker compose -f docker-compose.alloy.yaml down -v
 sudo docker compose -f docker-compose.falco.yaml down -v
 # Stop and remove the observability stack
 sudo docker compose -f docker-compose.observability-stack.yaml down -v
+# Remove the app
+sudo docker compose -f docker-compose.yaml down -v
 # Stop and remove the Dockhand container
 sudo docker compose -f docker-compose.dockhand.yaml down -v
 # Remove the observability network
