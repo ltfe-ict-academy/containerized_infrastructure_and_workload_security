@@ -204,6 +204,32 @@ sudo docker compose -f docker-compose.blackbox-exporter.yaml logs -f
 
 After starting the stack wait a few moments for the services to initialize, then open Grafana at `http://{PUBLIC_BIND_IP}:3001/` and check the `Blackbox Exporter: Services availability` dashboard.
 
+## Set up telemetry collector with Grafana Alloy
+
+Grafana Alloy is an open-source telemetry collector used to collect, process, and forward observability data from applications and infrastructure. It is based on the OpenTelemetry Collector and includes built-in support for Prometheus-style pipelines, making it useful for collecting metrics, logs, traces, and profiles in one unified agent. Instead of running many separate collectors or agents for different telemetry signals, Alloy provides a single configurable component that can receive data from applications, scrape metrics, transform telemetry, and send it to observability backends such as Grafana, Prometheus-compatible systems, Loki, Tempo, or Pyroscope.
+
+In a containerized application deployment, Grafana Alloy can be used as a central observability layer for Docker or Kubernetes workloads. It can collect container and application metrics, receive OpenTelemetry data from instrumented services, process logs, and forward traces to the appropriate backend for visualization and alerting. This helps teams understand how containers, services, and infrastructure behave during deployments and production operation. By using Alloy, organizations can simplify telemetry collection, reduce the number of separate monitoring agents, standardize observability pipelines, and gain a clearer view of application performance, reliability, and resource usage across their containerized environment.
+
+> Grafana Alloy can reduce the number of separate observability agents in a containerized deployment by combining multiple telemetry collection functions into a single component. It can replace or embed functionality similar to Node Exporter for host metrics and Blackbox Exporter for endpoint probing, while also collecting logs, traces, and other telemetry signals.
+
+To run the stack follow the instructions bellow:
+```bash
+# Check the docker-compose file
+cat docker-compose.alloy.yaml
+# Start Grafana Alloy
+sudo docker compose -f docker-compose.alloy.yaml up -d
+# Check the logs
+sudo docker compose -f docker-compose.alloy.yaml logs -f
+```
+
+After starting the stack wait a few moments for the services to initialize, then open Grafana at `http://{PUBLIC_BIND_IP}:3001/` and check the `Alloy: Application Logs` dashboard.
+
+
+## Runtime security with Falco
+
+Runtime security is an important part of protecting containerized applications after they have already been deployed and started running. While image scanning and configuration checks help find problems before deployment, runtime security focuses on detecting suspicious behavior while containers, hosts, and Kubernetes workloads are active. This includes events such as unexpected shell access inside a container, sensitive file reads, privilege escalation attempts, unusual network activity, or processes behaving differently from what is expected. Runtime monitoring helps teams identify threats that only appear during execution, including compromised containers, misconfigured workloads, and attacks that bypass earlier security controls.
+
+[Falco is an open-source](https://github.com/falcosecurity/falco) cloud-native runtime security tool used to detect abnormal behavior and potential security threats in real time. It monitors Linux kernel events and system calls, evaluates them against security rules, and generates alerts when suspicious activity is detected. In a containerized application deployment, Falco can be used to watch Docker or Kubernetes workloads for risky actions such as spawning a shell in a container, accessing host files, writing to sensitive directories, opening unexpected network connections, or running unauthorized binaries. By combining system-level visibility with container and Kubernetes metadata, Falco helps teams understand which pod, container, namespace, or workload triggered an alert, making it useful for incident detection, auditing, and improving the overall security posture of cloud-native environments.
 
 
 
@@ -217,6 +243,10 @@ sudo docker network rm observability_net
 sudo docker compose -f docker-compose.node-exporter.yaml down -v
 # Stop and remove the cAdvisor container
 sudo docker compose -f docker-compose.cadvisor.yaml down -v
+# Stop and remove the blackbox exporter container
+sudo docker compose -f docker-compose.blackbox-exporter.yaml down -v
+# Stop and remove the Grafana Alloy container
+sudo docker compose -f docker-compose.alloy.yaml down -v
 # Stop and remove the observability stack
 sudo docker compose -f docker-compose.observability-stack.yaml down -v
 ```
@@ -250,27 +280,6 @@ Grafana is pre-provisioned with Prometheus, Loki, and Tempo data sources. It als
 
 Change the Grafana admin password before using this stack on a shared host.
 
-## Optional: Enable Docker Daemon Metrics
-
-Prometheus can scrape Docker daemon metrics, but Docker does not enable the Prometheus endpoint by default.
-
-On a Linux Docker host, edit `/etc/docker/daemon.json`:
-
-```json
-{
-  "metrics-addr": "127.0.0.1:9323"
-}
-```
-
-Restart Docker:
-
-```bash
-sudo systemctl restart docker
-```
-
-The lab Prometheus container reaches the host as `host.docker.internal:9323`. On some Linux setups, binding Docker metrics to `127.0.0.1` is not reachable from a container. For a training VM, you can bind to the host bridge or to `0.0.0.0:9323`, but do that only with a firewall or isolated lab network. The Docker metrics endpoint should not be exposed to untrusted networks.
-
-If Docker daemon metrics are not enabled, the `docker-daemon` Prometheus target will be down. The rest of the stack still works.
 
 ## What To Look At First
 

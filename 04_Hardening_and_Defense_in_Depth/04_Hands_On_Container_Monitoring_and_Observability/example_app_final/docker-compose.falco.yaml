@@ -1,0 +1,43 @@
+name: falco-monitoring
+
+services:
+  falco:
+    image: falcosecurity/falco:0.44.0
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_ADMIN
+      - SYS_RESOURCE
+      - SYS_PTRACE
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - /sys/kernel/tracing:/sys/kernel/tracing:ro
+      - /var/run/docker.sock:/host/var/run/docker.sock:ro
+      - /proc:/host/proc:ro
+      - /etc:/host/etc:ro
+      - ./observability/falco/rules/local_rules.yaml:/etc/falco/rules.d/local_rules.yaml:ro
+    command:
+      - falco
+      - -o
+      - json_output=true
+      - -o
+      - json_include_output_property=true
+      - -o
+      - json_include_tags_property=true
+      - -o
+      - stdout_output.enabled=true
+      - -o
+      - syslog_output.enabled=false
+      - -o
+      - file_output.enabled=false
+    depends_on:
+      - alloy
+    networks:
+      - observability_net
+
+networks:
+  observability_net:
+    driver: bridge
+    external: true

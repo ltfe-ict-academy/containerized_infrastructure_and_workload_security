@@ -1,0 +1,33 @@
+name: alloy-monitoring
+
+services:
+  alloy:
+    image: grafana/alloy:latest
+    restart: unless-stopped
+    user: "0:0"
+    expose:
+      - "12345"
+      - "4317"
+      - "4318"
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - alloy_data:/var/lib/alloy/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+    networks:
+      - observability_net
+
+networks:
+  observability_net:
+    driver: bridge
+    external: true
+
+volumes:
+  alloy_data:
