@@ -1,3 +1,5 @@
+name: observability-dockhand
+
 services:
   socket-proxy:
     image: tecnativa/docker-socket-proxy
@@ -40,7 +42,7 @@ services:
 
   nginx-dockhand:
     build:
-      context: ./nginx-dockhand
+      context: ./observability/nginx-dockhand
       dockerfile: Dockerfile
     container_name: nginx-dockhand
     restart: unless-stopped

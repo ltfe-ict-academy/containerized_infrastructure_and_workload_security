@@ -68,7 +68,12 @@ Beyla or OTLP traces               -> Alloy -> Tempo -> Grafana
 This is also how many real investigations work. A Prometheus alert tells us there is a symptom. Loki tells us what happened around that time. Docker events tell us what the runtime changed. Falco tells us whether behavior looked suspicious. Tempo tells us where request time was spent.
 
 ## Presequisites
+
+Before starting this lab, make sure you have:
 ```bash
+# Move to the working directory
+cd ~/containerized_infrastructure_and_workload_security/04_Hardening_and_Defense_in_Depth/04_Hands_On_Container_Monitoring_and_Observability/example_app_final
+
 # Create and edit the .env file
 cp .env.example .env
 # Create local secret files
@@ -87,8 +92,6 @@ sudo docker compose -f docker-compose.yaml logs -f
 
 Create the observability network:
 ```bash
-cd observability
-
 sudo docker network create observability_net
 ```
 
@@ -103,6 +106,13 @@ Tools such as Portainer and Dockhand provide a graphical control plane for conta
 From a security perspective, these tools must be treated as administrative interfaces, not simple dashboards. A container management UI often has the ability to start containers, stop containers, open shells, view logs, edit stacks, change environment variables, and interact with images, volumes, and networks. That means it should be protected with strong authentication, least-privilege access, audit logging, regular updates, network restrictions, and preferably exposure only through a VPN, private admin network, or trusted reverse proxy.
 
 **[Dockhand](https://dockhand.pro/)** is a modern Docker management application focused on real-time container management, Docker Compose stack orchestration, and multi-environment support. It includes features such as starting and stopping containers, visual Compose editing, Git-based stack deployment, remote Docker host management, terminal access, real-time logs, vulnerability scanning, and container activity tracking.
+
+[Deployment security considerations](https://dockhand.pro/manual/#security-summary):
+- Dockhand needs access to Docker to manage containers. By default, the Dockhand container runs as a non-root user, which may not have permission to access the socket on your host system.
+- We placed a proxy between Dockhand and the actual Docker socket. This filters which API calls are allowed. A popular tool for this is [tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy).
+- Always restrict access to Dockhand itself using a reverse proxy with authentication, VPN (Tailscale/WireGuard), SSO/OIDC, or network segmentation. Treat Dockhand as an admin interface that should never be directly exposed to the internet.
+
+> The proxy acts as a firewall for the Docker API. It allows only necessary commands (list, start, stop containers) but can block dangerous ones (`docker run --privileged`, system commands). Dockhand connects to the proxy via a private Docker network, isolated from the raw socket. The socket proxy container itself requires elevated privileges to access the Docker socket, which transfers some security risk to the proxy container. Even with a socket proxy, anyone who gains access to Dockhand still has significant capabilities — starting/stopping containers, deleting volumes, pulling images, viewing logs, and more. The proxy limits the most dangerous operations but doesn't make Dockhand "safe to expose publicly".
 
 Start deploying the observability services:
 ```bash
