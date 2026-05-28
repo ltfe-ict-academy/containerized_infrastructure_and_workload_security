@@ -1,3 +1,5 @@
+name: example_app_final
+
 x-default-logging: &default-logging
   driver: json-file
   options:

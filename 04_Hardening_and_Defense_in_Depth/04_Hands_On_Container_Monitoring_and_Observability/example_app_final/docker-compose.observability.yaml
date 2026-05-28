@@ -1,64 +1,13 @@
-# Observability overlay for the hardened training application.
-# Start together with the original app:
-#   docker compose -f docker-compose.yaml -f docker-compose.observability.yaml up -d --build
+name: observability-stack
 
 services:
-  grafana:
-    image: ${GRAFANA_IMAGE:-grafana/grafana:latest}
-    init: true
-    restart: unless-stopped
-    ports:
-      - "${OBS_BIND:-127.0.0.1}:${GRAFANA_PORT:-3001}:3000"
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-course-observe-change-me}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_AUTH_ANONYMOUS_ENABLED: "false"
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/container-operations.json
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    depends_on:
-      - prometheus
-      - loki
-      - tempo
-    networks:
-      - observability_net
-
-  prometheus:
-    image: ${PROMETHEUS_IMAGE:-prom/prometheus:latest}
-    init: true
-    restart: unless-stopped
-    ports:
-      - "${OBS_BIND:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090"
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-7d}
-      - --web.enable-lifecycle
-    volumes:
-      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./observability/prometheus/rules:/etc/prometheus/rules:ro
-      - prometheus_data:/prometheus
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      - cadvisor
-      - node-exporter
-      - blackbox-exporter
-      - alloy
-    networks:
-      - observability_net
-      - public_net
-
   cadvisor:
     image: ${CADVISOR_IMAGE:-gcr.io/cadvisor/cadvisor:latest}
     init: true
     restart: unless-stopped
     privileged: true
     ports:
-      - "${OBS_BIND:-127.0.0.1}:${CADVISOR_PORT:-8081}:8080"
+      - "${PUBLIC_BIND_IP:-127.0.0.1}:${CADVISOR_PORT:-8081}:8080"
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
@@ -95,33 +44,6 @@ services:
       - observability_net
       - public_net
 
-  loki:
-    image: ${LOKI_IMAGE:-grafana/loki:latest}
-    init: true
-    restart: unless-stopped
-    ports:
-      - "${OBS_BIND:-127.0.0.1}:${LOKI_PORT:-3100}:3100"
-    command:
-      - -config.file=/etc/loki/local-config.yaml
-    volumes:
-      - ./observability/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
-      - loki_data:/loki
-    networks:
-      - observability_net
-
-  tempo:
-    image: ${TEMPO_IMAGE:-grafana/tempo:latest}
-    init: true
-    restart: unless-stopped
-    ports:
-      - "${OBS_BIND:-127.0.0.1}:${TEMPO_PORT:-3200}:3200"
-    command:
-      - -config.file=/etc/tempo/tempo.yaml
-    volumes:
-      - ./observability/tempo/tempo.yml:/etc/tempo/tempo.yaml:ro
-      - tempo_data:/tmp/tempo
-    networks:
-      - observability_net
 
   alloy:
     image: ${ALLOY_IMAGE:-grafana/alloy:latest}
@@ -129,9 +51,9 @@ services:
     restart: unless-stopped
     user: "0:0"
     ports:
-      - "${OBS_BIND:-127.0.0.1}:${ALLOY_PORT:-12345}:12345"
-      - "${OBS_BIND:-127.0.0.1}:${OTLP_GRPC_PORT:-4317}:4317"
-      - "${OBS_BIND:-127.0.0.1}:${OTLP_HTTP_PORT:-4318}:4318"
+      - "${PUBLIC_BIND_IP:-127.0.0.1}:${ALLOY_PORT:-12345}:12345"
+      - "${PUBLIC_BIND_IP:-127.0.0.1}:${OTLP_GRPC_PORT:-4317}:4317"
+      - "${PUBLIC_BIND_IP:-127.0.0.1}:${OTLP_HTTP_PORT:-4318}:4318"
     command:
       - run
       - --server.http.listen-addr=0.0.0.0:12345
@@ -211,20 +133,6 @@ services:
 
 
 
-  portainer:
-    image: ${PORTAINER_IMAGE:-portainer/portainer-ce:latest}
-    profiles:
-      - portainer
-    init: true
-    restart: unless-stopped
-    ports:
-      - "${OBS_BIND:-127.0.0.1}:${PORTAINER_PORT:-9443}:9443"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - portainer_data:/data
-    networks:
-      - observability_net
-
   beyla-backend:
     image: ${BEYLA_IMAGE:-grafana/beyla:latest}
     profiles:
@@ -289,5 +197,6 @@ volumes:
 networks:
   observability_net:
     driver: bridge
+    external: true
   public_net:
     driver: bridge

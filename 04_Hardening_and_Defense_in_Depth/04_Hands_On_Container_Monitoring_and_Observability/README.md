@@ -99,7 +99,7 @@ sudo docker network create observability_net
 Edit the `.env` in the observability directory
 
 
-## Container inspection and management with Dockerhaed
+## Container inspection and management with Dockerhand
 
 Tools such as Portainer and Dockhand provide a graphical control plane for container environments. They can make it easier to see containers, images, volumes, networks, stacks, logs, resource usage, and deployment state from one place. **[Portainer](https://www.portainer.io/)** supports Docker, Kubernetes, Docker Swarm, Podman, and ACI environments, and exposes management features through a GUI and API.
 
@@ -132,6 +132,22 @@ After starting the stack, configure Dockhand to use the proxy:
 - Save the environment
 
 To enable vulnerability scanning, follow the [instructions in the Dockhand documentation](https://dockhand.pro/manual/#images-scan).
+
+
+## Run the observability stack
+
+To run the stack follow the instructions bellow:
+```bash
+# Check the docker-compose file
+cat docker-compose.observability-stack.yaml
+
+# Start the stack
+sudo docker compose -f docker-compose.observability-stack.yaml up -d
+# Check the logs
+sudo docker compose -f docker-compose.observability-stack.yaml logs -f
+```
+
+
 
 ## Cleaning
 ```bash

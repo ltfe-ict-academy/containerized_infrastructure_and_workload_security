@@ -1,0 +1,82 @@
+name: observability-stack
+
+services:
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    ports:
+      - "${PUBLIC_BIND_IP:-127.0.0.1}:${GRAFANA_EXPOSED_PORT:-3001}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_AUTH_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_AUTH_PASSWORD:-course-observe-change-me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/container-operations.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    networks:
+      - observability_net
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    expose:
+      - "9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-7d}
+      - --web.enable-lifecycle
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - observability_net
+
+  loki:
+    image: ${LOKI_IMAGE:-grafana/loki:latest}
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${PUBLIC_BIND_IP:-127.0.0.1}:${LOKI_PORT:-3100}:3100"
+    command:
+      - -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./observability/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    networks:
+      - observability_net
+
+  tempo:
+    image: ${TEMPO_IMAGE:-grafana/tempo:latest}
+    init: true
+    restart: unless-stopped
+    expose:
+      - "3200"
+    command:
+      - -config.file=/etc/tempo/tempo.yaml
+    volumes:
+      - ./observability/tempo/tempo.yml:/etc/tempo/tempo.yaml:ro
+      - tempo_data:/tmp/tempo
+    networks:
+      - observability_net
+
+volumes:
+  grafana_data:
+  prometheus_data:
+  loki_data:
+  tempo_data:
+
+networks:
+  observability_net:
+    driver: bridge
+    external: true
