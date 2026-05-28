@@ -43,7 +43,7 @@ services:
       - observability_net
 
   loki:
-    image: ${LOKI_IMAGE:-grafana/loki:latest}
+    image: grafana/loki:latest
     restart: unless-stopped
     ports:
       - "${PUBLIC_BIND_IP:-127.0.0.1}:${LOKI_PORT:-3100}:3100"
@@ -56,7 +56,7 @@ services:
       - observability_net
 
   tempo:
-    image: ${TEMPO_IMAGE:-grafana/tempo:latest}
+    image: grafana/tempo:latest
     restart: unless-stopped
     expose:
       - "3200"

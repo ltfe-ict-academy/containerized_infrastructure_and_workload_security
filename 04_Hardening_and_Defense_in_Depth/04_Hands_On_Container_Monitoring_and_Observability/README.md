@@ -1,20 +1,5 @@
 # Hands On: Container Monitoring And Observability
 
-Hardening makes a containerized application harder to compromise. Monitoring and observability help us notice when something is wrong, understand what changed, and reconstruct what happened during an incident. In a mature container environment, these two ideas belong together. A hardened service without visibility is quiet when it fails. An observable service without hardening is easy to study but still too easy to abuse.
-
-This lab adds a complete observability layer to the already hardened example application. The application code, Dockerfiles, secrets layout, and original `docker-compose.yaml` are left unchanged. The monitoring stack is added as a Compose overlay and an `observability/` directory so that the security controls from the previous hands-on section remain visible.
-
-The goal is not only to show CPU charts. The goal is to build an operator and security view of the container environment:
-
-- metrics from containers, the host, the Docker daemon, and HTTP probes
-- centralized logs from every container
-- Docker daemon logs from journald when the host supports systemd
-- Docker lifecycle events, such as container starts, stops, restarts, exec sessions, and health changes
-- runtime security findings from Falco
-- traces through OpenTelemetry, Tempo, and optional zero-code eBPF instrumentation with Grafana Beyla
-- Grafana dashboards for operations and incident timelines
-- Dockhand as a container management UI, with Portainer available as an optional alternative
-
 ## Why Container Observability Is Different
 
 A traditional application usually runs as a normal process on a server. A containerized application runs as a process too, but it is wrapped in extra layers: image, runtime, namespaces, cgroups, networks, volumes, secrets, health checks, restart policies, and daemon APIs. This means an investigation needs more than application logs.
@@ -29,44 +14,6 @@ When a backend becomes slow, the important question is not only, "what did the a
 - did the failure line up with a deployment, image pull, volume mount, or network change?
 - did traces show that requests were stuck in the backend, database, Redis, or reverse proxy path?
 
-Good container observability brings these answers into one place. In this lab, that place is Grafana.
-
-## The Stack Used In This Lab
-
-| Area | Tool | What it does in the lab | Security value |
-| --- | --- | --- | --- |
-| Dashboards and correlation | Grafana | Provides dashboards and Explore views for metrics, logs, and traces | Gives one place to pivot between an alert, a log line, a Docker event, and a trace |
-| Metrics | Prometheus | Scrapes metrics from cAdvisor, node-exporter, Docker daemon metrics, Beyla, and blackbox probes | Detects resource pressure, restarts, health probe failures, and unusual container behavior |
-| Container metrics | cAdvisor | Exposes per-container CPU, memory, filesystem, and network metrics | Shows whether a workload is resource constrained or behaving unusually |
-| Host metrics | node-exporter | Exposes host CPU, memory, filesystem, network, and kernel-level metrics | Helps separate app failure from host failure |
-| Docker daemon metrics | Docker Prometheus endpoint | Exposes Docker Engine metrics when enabled on the host | Adds runtime control-plane health to the dashboard |
-| Centralized logs | Loki | Stores container logs, Falco output, Docker events, and Docker daemon logs | Provides fast incident timelines without running shell commands on every container |
-| Telemetry collection | Grafana Alloy | Reads Docker container logs, reads journald, receives OTLP traces, and forwards telemetry | Replaces older agent patterns and keeps logs and traces in a single collector configuration |
-| Runtime detection | Falco | Watches kernel events and applies runtime security rules | Turns behavior such as shell execution or sensitive file reads into searchable security alerts |
-| Traces | Tempo | Stores distributed traces received through Alloy | Shows request paths and latency when traces are available |
-| Zero-code app tracing | Grafana Beyla | Uses eBPF to observe HTTP traffic from the backend without changing the application | Gives baseline traces and RED metrics while keeping the app unchanged |
-| Docker events | docker-events sidecar | Runs `docker events --format '{{json .}}'` and sends the stream into Loki through Docker logs | Creates a timeline of container lifecycle activity |
-| Container UI | Dockhand | Provides a local UI for container inspection and management | Useful for labs and troubleshooting, but must be treated as sensitive because it uses the Docker socket |
-
-There are many good tools in this space. Fluent Bit and Vector are excellent log shippers. Jaeger is widely used for tracing. Cilium Tetragon and Aqua Tracee are strong eBPF runtime detection options. For this hands-on section, the stack uses the Grafana LGTM family, Prometheus, cAdvisor, Falco, and Beyla because they fit well together in Docker Compose and make correlation easy for a small training environment.
-
-## Architecture
-
-The observability path is deliberately simple:
-
-```text
-Container stdout/stderr logs       -> Alloy -> Loki  -> Grafana
-Docker events sidecar stdout       -> Alloy -> Loki  -> Grafana
-Docker daemon journald logs        -> Alloy -> Loki  -> Grafana
-Falco JSON stdout alerts           -> Alloy -> Loki  -> Grafana
-cAdvisor / node-exporter / probes  -> Prometheus     -> Grafana
-Docker daemon metrics              -> Prometheus     -> Grafana
-Beyla RED metrics                  -> Prometheus     -> Grafana
-Beyla or OTLP traces               -> Alloy -> Tempo -> Grafana
-```
-
-This is also how many real investigations work. A Prometheus alert tells us there is a symptom. Loki tells us what happened around that time. Docker events tell us what the runtime changed. Falco tells us whether behavior looked suspicious. Tempo tells us where request time was spent.
-
 ## Presequisites
 
 Before starting this lab, make sure you have:
@@ -74,13 +21,12 @@ Before starting this lab, make sure you have:
 # Move to the working directory
 cd ~/containerized_infrastructure_and_workload_security/04_Hardening_and_Defense_in_Depth/04_Hands_On_Container_Monitoring_and_Observability/example_app_final
 
-# Create and edit the .env file
-cp .env.example .env
+# Create the .env file for the practical setup
+chmod +x ./scripts/create_env_file.sh
+./scripts/create_env_file.sh
 # Create local secret files
 chmod +x ./scripts/create-local-secrets.sh
 ./scripts/create-local-secrets.sh
-# Create the observability environment file
-cp .env.observability.example .env.observability
 ```
 
 Start the hardened app:
@@ -94,10 +40,6 @@ Create the observability network:
 ```bash
 sudo docker network create observability_net
 ```
-
-<!-- TODO: Write this better -->
-Edit the `.env` in the observability directory
-
 
 ## Container inspection and management with Dockerhand
 
@@ -134,10 +76,15 @@ After starting the stack, configure Dockhand to use the proxy:
 To enable vulnerability scanning, follow the [instructions in the Dockhand documentation](https://dockhand.pro/manual/#images-scan).
 
 
-## Run the observability stack
+## Run the observability stack (Prometheus, Grafana, Loki, Tempo)
 
-In the Prometheus config change the server IP under `static_configs`
-<!-- # TODO  -->
+The observability stack consists of Prometheus, Grafana, Loki, and Tempo working together to provide full visibility into the health, performance, and behavior of applications and infrastructure. Each component is responsible for a different type of telemetry data. [Prometheus](https://github.com/prometheus/prometheus) collects and stores metrics such as CPU usage, memory consumption, request rates, and application performance indicators. [Loki](https://github.com/grafana/loki) aggregates and stores logs generated by containers and services, while [Tempo](https://github.com/grafana/tempo) collects distributed traces that show how requests move through different services in a microservice environment. [Grafana](https://github.com/grafana/grafana) acts as the central visualization platform that connects all of these data sources into a unified interface.
+
+Running the observability stack in a containerized deployment allows teams to monitor applications, infrastructure, and Kubernetes workloads in real time. Prometheus continuously scrapes metrics from exporters and instrumented applications, Loki collects logs from containers and system services, and Tempo stores trace information that helps identify latency issues and service dependencies. Grafana dashboards combine metrics, logs, and traces into a single view, making it easier to troubleshoot incidents, correlate events, and perform root cause analysis. This integrated approach improves operational visibility, accelerates debugging, and helps maintain reliable and scalable cloud-native applications.
+
+The observability stack is especially useful in distributed systems and microservice-based architectures, where issues may span multiple containers, nodes, or services. By combining metrics, logs, and traces, teams can move from detecting a problem to identifying its exact cause more efficiently. For example, an alert in Prometheus can be correlated with related logs in Loki and request traces in Tempo directly from Grafana. This enables faster incident response, proactive monitoring, and better understanding of application behavior under production workloads.
+
+In the Prometheus config (`./observability/prometheus/prometheus.yml`) change the server IP under `job_name: app-http-probes` job to match your server IP address. This is necessary for Prometheus to scrape the health check metrics from the application.
 
 To run the stack follow the instructions bellow:
 ```bash
@@ -149,6 +96,8 @@ sudo docker compose -f docker-compose.observability-stack.yaml up -d
 # Check the logs
 sudo docker compose -f docker-compose.observability-stack.yaml logs -f
 ```
+
+Grafana will be available at `http://{PUBLIC_BIND_IP}:3001/` with the credentials from the `.env` file.
 
 ## Run the Node exporter
 
@@ -244,12 +193,8 @@ sudo docker compose -f docker-compose.falco.yaml logs -f
 After starting the stack wait a few moments for the services to initialize, then open Grafana at `http://{PUBLIC_BIND_IP}:3001/` and check the `Falco: Runtime Security Events` dashboard.
 
 
-## Cleaning
+## Cleaning the environment
 ```bash
-# Stop and remove the Dockhand container
-sudo docker compose -f docker-compose.dockhand.yaml down -v
-# Remove the observability network
-sudo docker network rm observability_net
 # Stop and remove the node exporter container
 sudo docker compose -f docker-compose.node-exporter.yaml down -v
 # Stop and remove the cAdvisor container
@@ -262,173 +207,18 @@ sudo docker compose -f docker-compose.alloy.yaml down -v
 sudo docker compose -f docker-compose.falco.yaml down -v
 # Stop and remove the observability stack
 sudo docker compose -f docker-compose.observability-stack.yaml down -v
+# Stop and remove the Dockhand container
+sudo docker compose -f docker-compose.dockhand.yaml down -v
+# Remove the observability network
+sudo docker network rm observability_net
 ```
-
-
-
-
-
-## Generate Useful Events
-
-Run the helper script:
-
-```bash
-./scripts/generate-observability-events.sh
-```
-
-The script does five things:
-
-1. sends normal HTTP requests through the reverse proxy
-2. restarts the backend container to create Docker lifecycle events
-3. runs a shell command inside the backend container to create Docker `exec` events and a Falco shell alert
-4. reads `/etc/passwd` inside the backend container to generate a Falco file-read alert
-5. sends synthetic OpenTelemetry traces through Alloy into Tempo
-
-After the script finishes, go back to Grafana and set the time range to the last 15 minutes.
-
-Useful Loki queries:
-
-```logql
-{compose_project="example_app_final"}
-```
-
-```logql
-{service="falco"} | json
-```
-
-```logql
-{service="docker-events"} | json
-```
-
-```logql
-{service="docker-daemon"}
-```
-
-Useful Prometheus queries:
-
-```promql
-sum by (name) (rate(container_cpu_usage_seconds_total{name!="", image!=""}[5m]))
-```
-
-```promql
-container_memory_working_set_bytes{name!="", image!=""}
-```
-
-```promql
-probe_success
-```
-
-```promql
-up{job="beyla-backend"}
-```
-
-If Beyla is running and the backend receives HTTP traffic, open Grafana Explore, select **Tempo**, and search recent traces. Beyla provides baseline transaction-level tracing without changing the backend source code. For deep internal spans, custom business attributes, and stronger trace-to-log correlation, application-level OpenTelemetry instrumentation is still the stronger production pattern.
-
-## How The Security Timeline Works
-
-The runtime security part of the lab relies on Falco. Falco watches kernel events and compares them with rules. This lab adds two simple local rules:
-
-- `Training Shell Spawned In Container`
-- `Training Sensitive File Read In Container`
-
-These rules are intentionally easy to trigger and easy to read. They are not a complete production policy. They are here to show the flow:
-
-```text
-kernel activity -> Falco rule match -> JSON alert on stdout -> Docker log -> Alloy -> Loki -> Grafana
-```
-
-Docker events are collected separately:
-
-```text
-docker events --format '{{json .}}' -> docker-events container stdout -> Alloy -> Loki -> Grafana
-```
-
-That separation matters during incident response. A Falco alert says what suspicious behavior happened. Docker events say what the runtime was doing at the same time: container created, image pulled, service restarted, health status changed, or `exec` started.
 
 ## Operational And Security Best Practices
+- Keep observability private. Grafana, Prometheus, Loki, Tempo, cAdvisor, Dockhand, and Portainer are powerful operational interfaces. In production, put them behind SSO, network policy, TLS, and role-based access.
+- Treat the Docker socket as a high-risk control surface. Alloy, Dockhand, Portainer, Docker events, and Falco use the Docker socket or host visibility to inspect the environment. That visibility is useful, but it is also sensitive. Do not expose these services publicly, and do not run untrusted containers on the same host with access to observability credentials.
+- Collect enough data, but not everything forever. Metrics retention, log retention, and trace sampling should match the investigation window you need.
+- Do not log secrets. Centralized logging makes investigation easier, but it also concentrates risk. Avoid printing tokens, database passwords, private keys, authorization headers, or full session cookies. Add redaction at the application, proxy, and collector layers.
+- Alert on behavior, not only availability. CPU and memory alerts are useful, but security teams also need alerts for shell execution, sensitive file access, image pulls from unexpected registries, Docker daemon reloads, repeated restarts, and unexpected `exec` sessions.
+- Pin and verify observability images. In a production baseline, pin versions or digests. Falco official images are signed and can be verified with `cosign`.
+- Monitor the monitoring stack. A stopped log collector, a down Prometheus target, or a broken Falco sensor is itself a security signal. The absence of telemetry should be visible. You can monitor all the services with Grafana at `http://{PUBLIC_BIND_IP}:3001/` and check the `Monitoring Stack: Component Health` dashboard.
 
-Keep observability private. Grafana, Prometheus, Loki, Tempo, cAdvisor, Dockhand, and Portainer are powerful operational interfaces. In this lab they bind to localhost by default. In production, put them behind SSO, network policy, TLS, and role-based access.
-
-Treat the Docker socket as a high-risk control surface. Alloy, Dockhand, Portainer, Docker events, and Falco use the Docker socket or host visibility to inspect the environment. That visibility is useful, but it is also sensitive. Do not expose these services publicly, and do not run untrusted containers on the same host with access to observability credentials.
-
-Collect enough data, but not everything forever. Metrics retention, log retention, and trace sampling should match the investigation window you need. This lab uses short local retention. Production systems usually send telemetry to durable storage with retention tiers.
-
-Do not log secrets. Centralized logging makes investigation easier, but it also concentrates risk. Avoid printing tokens, database passwords, private keys, authorization headers, or full session cookies. Add redaction at the application, proxy, and collector layers.
-
-Alert on behavior, not only availability. CPU and memory alerts are useful, but security teams also need alerts for shell execution, sensitive file access, image pulls from unexpected registries, Docker daemon reloads, repeated restarts, and unexpected `exec` sessions.
-
-Pin and verify observability images. The lab uses image variables so students can run it easily. In a production baseline, pin versions or digests. Falco official images are signed and can be verified with `cosign`.
-
-Monitor the monitoring stack. A stopped log collector, a down Prometheus target, or a broken Falco sensor is itself a security signal. The absence of telemetry should be visible.
-
-## Troubleshooting
-
-Check container status:
-
-```bash
-docker compose \
-  -f docker-compose.yaml \
-  -f docker-compose.observability.yaml \
-  --profile beyla \
-  ps
-```
-
-Check Grafana logs:
-
-```bash
-docker compose -f docker-compose.yaml -f docker-compose.observability.yaml logs -f grafana
-```
-
-Check Alloy logs:
-
-```bash
-docker compose -f docker-compose.yaml -f docker-compose.observability.yaml logs -f alloy
-```
-
-Check Falco logs:
-
-```bash
-docker compose -f docker-compose.yaml -f docker-compose.observability.yaml logs -f falco
-```
-
-If Falco fails on Ubuntu with AppArmor, the overlay already uses `apparmor:unconfined`, which is commonly needed for this kind of lab deployment. If the host exposes tracefs at `/sys/kernel/debug/tracing` instead of `/sys/kernel/tracing`, adjust the Falco volume in `docker-compose.observability.yaml`.
-
-If Beyla does not produce traces, check that the host supports eBPF and BTF, that the backend is receiving HTTP traffic, and that the `beyla-backend` service is running with the `beyla` profile. Some language/framework combinations produce only baseline spans or may need application-level OpenTelemetry for detailed distributed tracing.
-
-If Docker daemon logs are empty, the host may not use systemd-journald, the Docker unit name may be different, or the lab may be running inside Docker Desktop. Container logs and Docker events should still appear in Loki.
-
-## Stop The Lab
-
-Stop containers but keep data volumes:
-
-```bash
-docker compose \
-  -f docker-compose.yaml \
-  -f docker-compose.observability.yaml \
-  --profile beyla \
-  down
-```
-
-Remove observability and application data volumes as well:
-
-```bash
-docker compose \
-  -f docker-compose.yaml \
-  -f docker-compose.observability.yaml \
-  --profile beyla \
-  down -v
-```
-
-## References
-
-- Grafana Alloy Docker log source: https://grafana.com/docs/alloy/latest/reference/components/loki/loki.source.docker/
-- Grafana Alloy journald source: https://grafana.com/docs/alloy/latest/reference/components/loki/loki.source.journal/
-- Grafana Alloy and Tempo tracing: https://grafana.com/docs/tempo/latest/set-up-for-tracing/instrument-send/set-up-collector/grafana-alloy/
-- Docker daemon Prometheus metrics: https://docs.docker.com/engine/daemon/prometheus/
-- Docker events: https://docs.docker.com/reference/cli/docker/system/events/
-- Falco container deployment: https://falco.org/docs/setup/container/
-- Grafana Beyla: https://grafana.com/docs/beyla/latest/
-- Grafana Beyla Docker setup: https://grafana.com/docs/beyla/latest/setup/docker/
-- Grafana Beyla OpenTelemetry and Prometheus export: https://grafana.com/docs/beyla/latest/configure/export-data/
-- Dockhand: https://github.com/fnsys/dockhand
-- Portainer CE documentation: https://docs.portainer.io/
