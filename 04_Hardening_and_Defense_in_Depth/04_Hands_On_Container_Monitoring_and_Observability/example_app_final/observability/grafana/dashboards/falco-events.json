@@ -1,0 +1,368 @@
+{
+  "uid": "falco-events",
+  "title": "Falco: Runtime Security Events",
+  "tags": [
+    "container-security-course",
+    "falco",
+    "security",
+    "runtime",
+    "detections"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "priority",
+        "label": "Min Priority",
+        "type": "custom",
+        "query": "Emergency,Alert,Critical,Error,Warning,Notice,Info,Debug",
+        "includeAll": false,
+        "current": { "text": "Warning", "value": "Warning" },
+        "options": [
+          { "text": "Emergency", "value": "Emergency" },
+          { "text": "Alert",     "value": "Alert" },
+          { "text": "Critical",  "value": "Critical" },
+          { "text": "Error",     "value": "Error" },
+          { "text": "Warning",   "value": "Warning" },
+          { "text": "Notice",    "value": "Notice" },
+          { "text": "Info",      "value": "Info" },
+          { "text": "Debug",     "value": "Debug" }
+        ]
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Critical / Alert / Emergency (last 1 h)",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 5, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({service=\"falco\"} | json | __error__=\"\" | priority=~\"Emergency|Alert|Critical\" [1h]))",
+          "legendFormat": "Critical+"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red",   "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "title": "Error (last 1 h)",
+      "type": "stat",
+      "gridPos": { "x": 5, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({service=\"falco\"} | json | __error__=\"\" | priority=\"Error\" [1h]))",
+          "legendFormat": "Error"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "title": "Warning (last 1 h)",
+      "type": "stat",
+      "gridPos": { "x": 9, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({service=\"falco\"} | json | __error__=\"\" | priority=\"Warning\" [1h]))",
+          "legendFormat": "Warning"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "title": "Notice / Info (last 1 h)",
+      "type": "stat",
+      "gridPos": { "x": 13, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({service=\"falco\"} | json | __error__=\"\" | priority=~\"Notice|Info|Debug\" [1h]))",
+          "legendFormat": "Notice/Info"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "title": "Total Alerts (last 1 h)",
+      "type": "stat",
+      "gridPos": { "x": 17, "y": 0, "w": 7, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({service=\"falco\"} [1h]))",
+          "legendFormat": "total"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "purple", "value": null }]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "title": "Alert Rate by Priority",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 14, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (priority) (count_over_time({service=\"falco\"} | json | __error__=\"\" [1m]))",
+          "legendFormat": "{{priority}}"
+        }
+      ],
+      "description": "Alert count per minute grouped by Falco priority level.",
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "fillOpacity": 8, "lineWidth": 1 }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Emergency" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "dark-red" } }] },
+          { "matcher": { "id": "byName", "options": "Alert" },     "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byName", "options": "Critical" },  "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byName", "options": "Error" },     "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "semi-dark-orange" } }] },
+          { "matcher": { "id": "byName", "options": "Warning" },   "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }] },
+          { "matcher": { "id": "byName", "options": "Notice" },    "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] },
+          { "matcher": { "id": "byName", "options": "Informational" },      "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "light-blue" } }] }
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "title": "Top Triggered Rules (last 1 h)",
+      "type": "bargauge",
+      "gridPos": { "x": 14, "y": 4, "w": 10, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (rule) (count_over_time({service=\"falco\"} | json | __error__=\"\" [1h]))",
+          "legendFormat": "{{rule}}",
+          "instant": true
+        }
+      ],
+      "description": "Most frequently fired rules in the selected time window.",
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red",    "value": 20 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "title": "Critical / Alert / Emergency — Full Detail",
+      "type": "logs",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service=\"falco\"} | json | __error__=\"\" | priority=~\"Emergency|Alert|Critical\""
+        }
+      ],
+      "description": "Only the highest-severity Falco alerts. Expand a line to see output_fields with container name, process, and syscall details.",
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 9,
+      "title": "Error + Warning Alerts",
+      "type": "logs",
+      "gridPos": { "x": 0, "y": 20, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service=\"falco\"} | json | __error__=\"\" | priority=~\"Error|Warning\""
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 10,
+      "title": "Alert Rate by Rule (top rules over time)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 28, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (rule) (count_over_time({service=\"falco\"} | json | __error__=\"\" [2m]))",
+          "legendFormat": "{{rule}}"
+        }
+      ],
+      "description": "Firing rate per rule over time — useful for spotting noisy rules or persistent attack patterns.",
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "fillOpacity": 4, "lineWidth": 1 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "title": "All Alerts (filtered by Min Priority variable)",
+      "type": "logs",
+      "gridPos": { "x": 0, "y": 36, "w": 24, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service=\"falco\"} | json | __error__=\"\" | priority=~\"$priority|Emergency|Alert|Critical|Error|Warning\""
+        }
+      ],
+      "description": "All Falco alerts. Use the Min Priority variable at the top to narrow scope. Expand any line to see full output_fields including container name, process cmdline, and file path.",
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    }
+  ]
+}

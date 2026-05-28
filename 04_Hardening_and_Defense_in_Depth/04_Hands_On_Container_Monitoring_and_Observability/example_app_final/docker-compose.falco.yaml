@@ -32,8 +32,6 @@ services:
       - syslog_output.enabled=false
       - -o
       - file_output.enabled=false
-    depends_on:
-      - alloy
     networks:
       - observability_net
 

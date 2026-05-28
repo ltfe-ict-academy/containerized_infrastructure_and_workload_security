@@ -231,6 +231,17 @@ Runtime security is an important part of protecting containerized applications a
 
 [Falco is an open-source](https://github.com/falcosecurity/falco) cloud-native runtime security tool used to detect abnormal behavior and potential security threats in real time. It monitors Linux kernel events and system calls, evaluates them against security rules, and generates alerts when suspicious activity is detected. In a containerized application deployment, Falco can be used to watch Docker or Kubernetes workloads for risky actions such as spawning a shell in a container, accessing host files, writing to sensitive directories, opening unexpected network connections, or running unauthorized binaries. By combining system-level visibility with container and Kubernetes metadata, Falco helps teams understand which pod, container, namespace, or workload triggered an alert, making it useful for incident detection, auditing, and improving the overall security posture of cloud-native environments.
 
+To run the stack follow the instructions bellow:
+```bash
+# Check the docker-compose file
+cat docker-compose.falco.yaml
+# Start Falco
+sudo docker compose -f docker-compose.falco.yaml up -d
+# Check the logs
+sudo docker compose -f docker-compose.falco.yaml logs -f
+```
+
+After starting the stack wait a few moments for the services to initialize, then open Grafana at `http://{PUBLIC_BIND_IP}:3001/` and check the `Falco: Runtime Security Events` dashboard.
 
 
 ## Cleaning
@@ -247,55 +258,15 @@ sudo docker compose -f docker-compose.cadvisor.yaml down -v
 sudo docker compose -f docker-compose.blackbox-exporter.yaml down -v
 # Stop and remove the Grafana Alloy container
 sudo docker compose -f docker-compose.alloy.yaml down -v
+# Stop and remove the Falco container
+sudo docker compose -f docker-compose.falco.yaml down -v
 # Stop and remove the observability stack
 sudo docker compose -f docker-compose.observability-stack.yaml down -v
 ```
 
 
-# OTHER
-Start the observability stack with the `beyla` profile:
-
-```bash
-sudo docker compose -f docker-compose.observability.yaml --profile beyla up -d
-```
-
-The `beyla` profile enables zero-code eBPF instrumentation of the backend container. When Beyla is not supported by the host kernel, remove `--profile beyla`; logs, metrics, Docker events, Falco, and synthetic traces will still work.
-
-Open the main interfaces:
-
-| Interface | URL | Default credentials |
-| --- | --- | --- |
-| Application | `http://127.0.0.1:8080` | none |
-| Grafana | `http://127.0.0.1:3001` | `admin` / `course-observe-change-me` |
-| Dockhand | `http://127.0.0.1:3002` | first-run setup depends on image version |
-| Prometheus | `http://127.0.0.1:9090` | none |
-| cAdvisor | `http://127.0.0.1:8081` | none |
-| Loki | `http://127.0.0.1:3100` | API only |
-| Tempo | `http://127.0.0.1:3200` | API only |
-
-Grafana is pre-provisioned with Prometheus, Loki, and Tempo data sources. It also includes two dashboards:
-
-- **Container Operations Overview**
-- **Container Security Timeline**
-
-Change the Grafana admin password before using this stack on a shared host.
 
 
-## What To Look At First
-
-Open Grafana and start with the **Container Operations Overview** dashboard.
-
-Look for:
-
-- whether the application probes are passing
-- CPU and memory usage per container
-- recently restarted containers
-- logs from `backend`, `frontend`, `reverse-proxy`, `db`, and `redis`
-- whether the `beyla-backend` Prometheus target is up if the `beyla` profile is enabled
-
-Then open **Container Security Timeline**.
-
-This dashboard is designed for incident review. It puts Falco alerts, Docker events, Docker daemon logs, application probe failures, and suspicious log keywords in the same time window.
 
 ## Generate Useful Events
 

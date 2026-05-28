@@ -1,16 +1,484 @@
-# Local Falco rules for the training lab.
-# They are intentionally simple and generate readable alerts for Grafana Loki timelines.
+# ============================================================
+# Local Falco Rules — Container Security Lab
+# Covers: shells, privilege escalation, credential access,
+#         filesystem tampering, network tools, container escape,
+#         Docker lifecycle, crypto mining, recon, and more.
+# MITRE ATT&CK technique IDs are included as tags.
+# ============================================================
 
-- rule: Training Shell Spawned In Container
-  desc: A shell was spawned inside a container. In production this is often an investigation trigger unless it is part of a controlled debug workflow.
-  condition: spawned_process and container.id != host and proc.name in (bash, sh, ash, dash, zsh)
-  output: Shell spawned inside container (user=%user.name uid=%user.uid command=%proc.cmdline container=%container.name image=%container.image.repository:%container.image.tag)
-  priority: WARNING
-  tags: [container, shell, mitre_execution, training]
 
-- rule: Training Sensitive File Read In Container
-  desc: A process inside a container read a sensitive Linux identity or credential file.
-  condition: open_read and container.id != host and fd.name in (/etc/shadow, /etc/sudoers, /etc/passwd)
-  output: Sensitive file read inside container (user=%user.name command=%proc.cmdline file=%fd.name container=%container.name image=%container.image.repository:%container.image.tag)
+# ------------------------------------------------------------
+# SHELLS & INTERACTIVE TERMINALS
+# ------------------------------------------------------------
+
+- rule: Shell Spawned In Container
+  desc: >
+    A shell was spawned inside a container. In production this is almost
+    always an investigation trigger unless part of a controlled debug workflow.
+  condition: >
+    spawned_process
+    and container.id != host
+    and proc.name in (bash, sh, ash, dash, zsh, fish, ksh, tcsh, csh)
+  output: >
+    Shell spawned in container
+    (user=%user.name uid=%user.uid command=%proc.cmdline
+     container=%container.name image=%container.image.repository:%container.image.tag)
   priority: WARNING
-  tags: [container, credential_access, training]
+  tags: [container, shell, mitre_execution, T1059]
+
+- rule: Interactive Shell In Container
+  desc: >
+    A shell was started with a TTY attached (interactive session) inside a container.
+    This is a strong indicator of hands-on-keyboard attacker activity or unauthorised
+    debug access.
+  condition: >
+    spawned_process
+    and container.id != host
+    and proc.name in (bash, sh, ash, dash, zsh, fish, ksh)
+    and proc.tty != 0
+  output: >
+    Interactive TTY shell in container
+    (user=%user.name uid=%user.uid command=%proc.cmdline tty=%proc.tty
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: ERROR
+  tags: [container, shell, interactive, mitre_execution, T1059]
+
+
+# ------------------------------------------------------------
+# PRIVILEGE ESCALATION & CAPABILITIES
+# ------------------------------------------------------------
+
+- rule: Privileged Container Started
+  desc: >
+    A container was started with the --privileged flag, which disables all
+    security boundaries and grants full host kernel access.
+  condition: >
+    evt.type = container
+    and container.privileged = true
+    and container.id != host
+  output: >
+    Privileged container started
+    (container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: CRITICAL
+  tags: [container, privilege_escalation, mitre_privilege_escalation, T1611]
+
+- rule: Setuid Or Setgid Bit Set In Container
+  desc: >
+    A process set the setuid or setgid bit on a binary inside a container,
+    which can be used for local privilege escalation.
+  condition: >
+    evt.type = chmod
+    and container.id != host
+    and (evt.arg.mode contains S_ISUID or evt.arg.mode contains S_ISGID)
+  output: >
+    Setuid/setgid bit set in container
+    (user=%user.name command=%proc.cmdline file=%fd.name
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: ERROR
+  tags: [container, privilege_escalation, T1548.001]
+
+- rule: Ptrace Process Injection Attempt
+  desc: >
+    A process used ptrace with a write-class request, commonly used for
+    process injection or bypassing security controls.
+  condition: >
+    evt.type = ptrace
+    and container.id != host
+    and evt.arg.request in (PTRACE_POKETEXT, PTRACE_POKEDATA, PTRACE_POKEUSER,
+                             PTRACE_SETREGS, PTRACE_ATTACH)
+  output: >
+    Ptrace injection attempt in container
+    (user=%user.name command=%proc.cmdline target_pid=%evt.arg.pid
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: CRITICAL
+  tags: [container, process_injection, mitre_defense_evasion, T1055]
+
+- rule: Sudoers File Modified In Container
+  desc: >
+    The sudoers configuration was modified inside a container,
+    which could grant persistent root access.
+  condition: >
+    open_write
+    and container.id != host
+    and fd.name in (/etc/sudoers, /etc/sudoers.d)
+  output: >
+    Sudoers file modified in container
+    (user=%user.name command=%proc.cmdline file=%fd.name
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: CRITICAL
+  tags: [container, privilege_escalation, persistence, T1548.003]
+
+
+# ------------------------------------------------------------
+# CREDENTIAL ACCESS & SENSITIVE FILE READS
+# ------------------------------------------------------------
+
+- rule: Sensitive Credential File Read In Container
+  desc: >
+    A process read a sensitive identity or credential database file.
+  condition: >
+    open_read
+    and container.id != host
+    and fd.name in (/etc/shadow, /etc/sudoers, /etc/gshadow,
+                    /etc/master.passwd, /etc/security/passwd)
+  output: >
+    Sensitive credential file read in container
+    (user=%user.name uid=%user.uid command=%proc.cmdline file=%fd.name
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: ERROR
+  tags: [container, credential_access, T1003.008]
+
+- rule: Process Environment Variables Dumped
+  desc: >
+    A process read /proc/PID/environ for another process, which can expose
+    secrets injected as environment variables.
+  condition: >
+    open_read
+    and container.id != host
+    and fd.name glob "/proc/*/environ"
+    and not proc.name in (ps)
+  output: >
+    Process env vars read in container
+    (user=%user.name command=%proc.cmdline file=%fd.name
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: WARNING
+  tags: [container, credential_access, T1083]
+
+- rule: SSH Private Key Accessed In Container
+  desc: >
+    An SSH private key or authorized_keys file was read inside a container.
+  condition: >
+    open_read
+    and container.id != host
+    and (fd.name glob "/root/.ssh/*" or fd.name glob "/home/*/.ssh/*")
+    and fd.name != "/root/.ssh/known_hosts"
+  output: >
+    SSH key accessed in container
+    (user=%user.name command=%proc.cmdline file=%fd.name
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: ERROR
+  tags: [container, credential_access, T1552.004]
+
+- rule: Service Account Token Read In Container
+  desc: >
+    A process read the Kubernetes service-account token file.
+    In a container this may indicate a cloud credential theft attempt.
+  condition: >
+    open_read
+    and container.id != host
+    and fd.name glob "/run/secrets/kubernetes.io/*"
+  output: >
+    Kubernetes service-account token read
+    (user=%user.name command=%proc.cmdline file=%fd.name
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: ERROR
+  tags: [container, credential_access, cloud, T1528]
+
+
+# ------------------------------------------------------------
+# FILESYSTEM TAMPERING & PERSISTENCE
+# ------------------------------------------------------------
+
+- rule: Binary Directory Written In Container
+  desc: >
+    A process wrote a file into a system binary directory inside a container.
+    This indicates potential backdoor installation or binary replacement.
+  condition: >
+    open_write
+    and container.id != host
+    and (fd.name glob "/bin/*" or fd.name glob "/sbin/*"
+         or fd.name glob "/usr/bin/*" or fd.name glob "/usr/sbin/*"
+         or fd.name glob "/usr/local/bin/*" or fd.name glob "/usr/local/sbin/*")
+  output: >
+    Write into binary directory in container
+    (user=%user.name command=%proc.cmdline file=%fd.name
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: ERROR
+  tags: [container, persistence, defense_evasion, T1574]
+
+- rule: Write Below Etc In Container
+  desc: >
+    A process modified a file under /etc inside a container.
+    Excludes transient files updated legitimately by standard tools.
+  condition: >
+    open_write
+    and container.id != host
+    and fd.name glob "/etc/*"
+    and not fd.name in (/etc/mtab, /etc/ld.so.cache, /etc/resolv.conf,
+                         /etc/hosts, /etc/hostname)
+  output: >
+    Write below /etc in container
+    (user=%user.name command=%proc.cmdline file=%fd.name
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: WARNING
+  tags: [container, persistence, T1222]
+
+- rule: Crontab Modified In Container
+  desc: >
+    A crontab file was created or modified inside a container —
+    a common persistence mechanism.
+  condition: >
+    open_write
+    and container.id != host
+    and (fd.name glob "/etc/cron*" or fd.name glob "/var/spool/cron*")
+  output: >
+    Crontab modified in container
+    (user=%user.name command=%proc.cmdline file=%fd.name
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: ERROR
+  tags: [container, persistence, T1053.003]
+
+- rule: User Or Group Database Modified In Container
+  desc: >
+    The passwd, shadow, or group files were written inside a container —
+    account creation or privilege modification.
+  condition: >
+    open_write
+    and container.id != host
+    and fd.name in (/etc/passwd, /etc/shadow, /etc/group, /etc/gshadow)
+  output: >
+    User/group database modified in container
+    (user=%user.name command=%proc.cmdline file=%fd.name
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: CRITICAL
+  tags: [container, persistence, account_manipulation, T1136]
+
+
+# ------------------------------------------------------------
+# NETWORK TOOLS, REVERSE SHELLS & EXFILTRATION
+# ------------------------------------------------------------
+
+- rule: Netcat Executed In Container
+  desc: >
+    netcat or ncat was executed inside a container. Commonly used to create
+    backdoor listeners, transfer files, or as part of a reverse shell.
+  condition: >
+    spawned_process
+    and container.id != host
+    and proc.name in (nc, ncat, netcat, nc.openbsd, nc.traditional)
+  output: >
+    Netcat executed in container
+    (user=%user.name command=%proc.cmdline
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: CRITICAL
+  tags: [container, network_tool, lateral_movement, T1095]
+
+- rule: Network Scanner Executed In Container
+  desc: >
+    A network scanning tool was run inside a container (discovery phase of attack).
+  condition: >
+    spawned_process
+    and container.id != host
+    and proc.name in (nmap, masscan, zmap, arp-scan, unicornscan)
+  output: >
+    Network scanner executed in container
+    (user=%user.name command=%proc.cmdline
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: ERROR
+  tags: [container, discovery, T1046]
+
+- rule: Reverse Shell Attempt In Container
+  desc: >
+    A shell was spawned with I/O redirected to a TCP socket — a classic
+    reverse shell pattern.
+  condition: >
+    spawned_process
+    and container.id != host
+    and proc.name in (bash, sh, ash, dash, zsh)
+    and (proc.cmdline contains "/dev/tcp/"
+         or proc.cmdline contains ">&"
+         or proc.cmdline contains "0>&1")
+  output: >
+    Reverse shell attempt in container
+    (user=%user.name command=%proc.cmdline
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: CRITICAL
+  tags: [container, reverse_shell, T1059, T1071]
+
+- rule: Data Exfiltration Tool In Container
+  desc: >
+    curl, wget, or similar tools used inside a container at the command line.
+    May indicate C2 communication, payload download, or data exfiltration.
+  condition: >
+    spawned_process
+    and container.id != host
+    and proc.name in (curl, wget, lwp-request, axel, aria2c)
+    and proc.pname in (bash, sh, ash, dash, zsh, fish)
+  output: >
+    HTTP tool spawned from shell in container
+    (user=%user.name command=%proc.cmdline parent=%proc.pname
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: WARNING
+  tags: [container, exfiltration, command_and_control, T1105]
+
+
+# ------------------------------------------------------------
+# CONTAINER ESCAPE ATTEMPTS
+# ------------------------------------------------------------
+
+- rule: Docker Socket Accessed Inside Container
+  desc: >
+    A process inside a container opened the Docker socket. If the socket
+    is bind-mounted into the container, this allows full host compromise.
+  condition: >
+    (open_read or open_write)
+    and container.id != host
+    and fd.name = /var/run/docker.sock
+  output: >
+    Docker socket accessed inside container
+    (user=%user.name command=%proc.cmdline
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: CRITICAL
+  tags: [container, escape, privilege_escalation, T1611]
+
+- rule: Mount Executed In Container
+  desc: >
+    The mount syscall or mount binary was used inside a container.
+    Mounting host paths is a primary container-escape technique.
+  condition: >
+    spawned_process
+    and container.id != host
+    and proc.name = mount
+  output: >
+    mount executed in container
+    (user=%user.name command=%proc.cmdline
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: CRITICAL
+  tags: [container, escape, T1611]
+
+- rule: Nsenter Executed
+  desc: >
+    nsenter was used to enter another namespace — can be used to break out
+    of a container or move laterally to another container.
+  condition: >
+    spawned_process
+    and proc.name = nsenter
+  output: >
+    nsenter executed
+    (user=%user.name command=%proc.cmdline
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: CRITICAL
+  tags: [container, escape, lateral_movement, T1611]
+
+- rule: Host Path Traversal Attempt
+  desc: >
+    A process inside a container tried to read outside its root via
+    path traversal (../../) patterns.
+  condition: >
+    open_read
+    and container.id != host
+    and fd.name glob "*/../../../*"
+  output: >
+    Path traversal read attempt in container
+    (user=%user.name command=%proc.cmdline file=%fd.name
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: ERROR
+  tags: [container, escape, T1083]
+
+
+# ------------------------------------------------------------
+# PACKAGE MANAGERS (unexpected runtime installs)
+# ------------------------------------------------------------
+
+- rule: Package Manager Executed In Container
+  desc: >
+    A package manager was run inside a running container. In production
+    this is almost always unexpected and may indicate attacker tooling
+    being installed or a supply-chain compromise.
+  condition: >
+    spawned_process
+    and container.id != host
+    and proc.name in (apt, apt-get, aptitude, yum, dnf, microdnf,
+                      zypper, apk, pip, pip3, pip2, npm, gem, cargo,
+                      conda, easy_install)
+  output: >
+    Package manager executed in container
+    (user=%user.name command=%proc.cmdline
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: WARNING
+  tags: [container, execution, persistence, T1072]
+
+
+# ------------------------------------------------------------
+# CRYPTO MINING
+# ------------------------------------------------------------
+
+- rule: Crypto Miner Process Detected
+  desc: >
+    A known crypto-mining binary was executed, or a process cmdline contains
+    the stratum protocol string used by mining pools.
+  condition: >
+    spawned_process
+    and container.id != host
+    and (proc.name in (xmrig, xmr-stak, cpuminer, minerd, nheqminer,
+                       ethminer, claymore, nbminer, t-rex, gminer, lolminer)
+         or proc.cmdline contains "stratum+tcp"
+         or proc.cmdline contains "stratum+ssl"
+         or proc.cmdline contains "mining.subscribe")
+  output: >
+    Crypto miner detected in container
+    (user=%user.name command=%proc.cmdline
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: CRITICAL
+  tags: [container, impact, crypto_mining, T1496]
+
+
+# ------------------------------------------------------------
+# DOCKER LIFECYCLE & INFRASTRUCTURE EVENTS (host-level)
+# ------------------------------------------------------------
+
+- rule: New Container Started
+  desc: >
+    Falco detected a new container starting on this host.
+    Useful as an audit trail for all container lifecycle changes.
+  condition: >
+    evt.type = container
+    and container.id != host
+  output: >
+    New container started
+    (container=%container.name id=%container.id
+     image=%container.image.repository:%container.image.tag)
+  priority: INFO
+  tags: [host, docker, lifecycle, infrastructure, T1610]
+
+- rule: Exec Into Running Container
+  desc: >
+    A process was spawned inside a container by the container runtime after
+    the container was already started (docker exec / kubectl exec pattern).
+    The parent is the container shim rather than the container's own init.
+  condition: >
+    spawned_process
+    and container.id != host
+    and proc.vpid = 1
+    and proc.pname in (runc, containerd-shim, containerd-shim-runc-v2,
+                       docker-runc, containerd)
+  output: >
+    Exec into running container
+    (user=%user.name command=%proc.cmdline parent=%proc.pname
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: NOTICE
+  tags: [host, docker, exec, audit, T1609]
+
+
+# ------------------------------------------------------------
+# RECONNAISSANCE
+# ------------------------------------------------------------
+
+- rule: Recon Commands Run Interactively In Container
+  desc: >
+    Common OS reconnaissance commands were executed from an interactive
+    shell inside a container — a strong hands-on-keyboard signal.
+  condition: >
+    spawned_process
+    and container.id != host
+    and proc.tty != 0
+    and proc.name in (whoami, id, hostname, uname, ps, netstat, ss,
+                      ifconfig, ip, iptables, ip6tables, nftables,
+                      cat, find, locate, env, printenv, set)
+    and proc.pname in (bash, sh, ash, dash, zsh, fish)
+  output: >
+    Recon command run interactively in container
+    (user=%user.name command=%proc.cmdline parent=%proc.pname
+     container=%container.name image=%container.image.repository:%container.image.tag)
+  priority: NOTICE
+  tags: [container, discovery, T1082, T1083, T1049]
