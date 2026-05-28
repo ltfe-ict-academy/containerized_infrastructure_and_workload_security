@@ -1,0 +1,19 @@
+name: node-exporter
+
+services:
+  node-exporter:
+    image: prom/node-exporter:latest
+    restart: unless-stopped
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - observability_net
+
+networks:
+  observability_net:
+    driver: bridge
+    external: true

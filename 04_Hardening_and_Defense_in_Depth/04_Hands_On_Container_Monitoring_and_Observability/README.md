@@ -147,7 +147,23 @@ sudo docker compose -f docker-compose.observability-stack.yaml up -d
 sudo docker compose -f docker-compose.observability-stack.yaml logs -f
 ```
 
+## Run the Node exporter
 
+Host metric monitoring is an essential part of maintaining reliable infrastructure, because it provides visibility into the health and performance of servers and virtual machines. By collecting metrics such as CPU usage, memory consumption, disk utilization, filesystem capacity, and network activity, teams can detect resource bottlenecks early, investigate performance issues faster, and prevent outages before they affect users. These metrics also help with capacity planning, alerting, and understanding how applications behave under different workloads.
+
+[Prometheus Node Exporter](https://github.com/prometheus/node_exporter) is a widely used exporter for collecting host-level hardware and operating-system metrics from Linux and other Unix-like systems. It exposes system metrics in a Prometheus-compatible format, allowing Prometheus to scrape, store, query, and alert on them. With Node Exporter, teams can monitor key indicators such as CPU load, available memory, disk space, disk I/O, filesystem usage, and network traffic from a single monitoring pipeline. This makes it easier to build dashboards, define meaningful alerts, and maintain a clear view of infrastructure health across multiple hosts.
+
+To run the stack follow the instructions bellow:
+```bash
+# Check the docker-compose file
+cat docker-compose.node-exporter.yaml
+# Start the node exporter
+sudo docker compose -f docker-compose.node-exporter.yaml up -d
+# Check the logs
+sudo docker compose -f docker-compose.node-exporter.yaml logs -f
+```
+
+After starting the stack wait a few moments for the services to initialize, then open Grafana at `http://{PUBLIC_BIND_IP}:3001/` and check the `Node Exporter: Host Metrics` dashboard.
 
 ## Cleaning
 ```bash
@@ -155,6 +171,10 @@ sudo docker compose -f docker-compose.observability-stack.yaml logs -f
 sudo docker compose -f docker-compose.dockhand.yaml down -v
 # Remove the observability network
 sudo docker network rm observability_net
+# Stop and remove the node exporter container
+sudo docker compose -f docker-compose.node-exporter.yaml down -v
+# Stop and remove the observability stack
+sudo docker compose -f docker-compose.observability-stack.yaml down -v
 ```
 
 

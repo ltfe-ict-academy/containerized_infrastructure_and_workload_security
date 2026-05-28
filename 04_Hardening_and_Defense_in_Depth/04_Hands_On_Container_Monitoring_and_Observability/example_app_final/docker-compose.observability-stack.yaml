@@ -44,7 +44,6 @@ services:
 
   loki:
     image: ${LOKI_IMAGE:-grafana/loki:latest}
-    init: true
     restart: unless-stopped
     ports:
       - "${PUBLIC_BIND_IP:-127.0.0.1}:${LOKI_PORT:-3100}:3100"
@@ -58,7 +57,6 @@ services:
 
   tempo:
     image: ${TEMPO_IMAGE:-grafana/tempo:latest}
-    init: true
     restart: unless-stopped
     expose:
       - "3200"
@@ -66,7 +64,7 @@ services:
       - -config.file=/etc/tempo/tempo.yaml
     volumes:
       - ./observability/tempo/tempo.yml:/etc/tempo/tempo.yaml:ro
-      - tempo_data:/tmp/tempo
+      - tempo_data:/var/tempo
     networks:
       - observability_net
 

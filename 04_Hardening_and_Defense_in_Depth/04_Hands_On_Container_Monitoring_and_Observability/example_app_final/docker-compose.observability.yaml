@@ -19,19 +19,7 @@ services:
     networks:
       - observability_net
 
-  node-exporter:
-    image: ${NODE_EXPORTER_IMAGE:-prom/node-exporter:latest}
-    init: true
-    restart: unless-stopped
-    pid: host
-    command:
-      - --path.rootfs=/host
-      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
-    volumes:
-      - /:/host:ro,rslave
-    networks:
-      - observability_net
-
+  
   blackbox-exporter:
     image: ${BLACKBOX_EXPORTER_IMAGE:-prom/blackbox-exporter:latest}
     init: true
