@@ -52,8 +52,11 @@ scrape_configs:
       module: [http_2xx]
     static_configs:
       - targets:
-          - http://reverse-proxy:8080/healthz
-          - http://reverse-proxy:8080/api/health
+          # Using the public IP directly because the reverse-proxy binds to PUBLISH_HOST
+          # (not 0.0.0.0), so host.docker.internal (Docker bridge 172.17.0.1) can't reach it.
+          # Update these targets if PUBLISH_HOST or PUBLIC_PORT changes in .env.
+          - http://212.101.137.200:80/healthz
+          - http://212.101.137.200:80/api/health
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

@@ -1,38 +1,6 @@
 name: observability-stack
 
 services:
-  cadvisor:
-    image: ${CADVISOR_IMAGE:-gcr.io/cadvisor/cadvisor:latest}
-    init: true
-    restart: unless-stopped
-    privileged: true
-    ports:
-      - "${PUBLIC_BIND_IP:-127.0.0.1}:${CADVISOR_PORT:-8081}:8080"
-    volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-      - /dev/disk/:/dev/disk:ro
-    devices:
-      - /dev/kmsg:/dev/kmsg
-    networks:
-      - observability_net
-
-  
-  blackbox-exporter:
-    image: ${BLACKBOX_EXPORTER_IMAGE:-prom/blackbox-exporter:latest}
-    init: true
-    restart: unless-stopped
-    command:
-      - --config.file=/etc/blackbox_exporter/config.yml
-    volumes:
-      - ./observability/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
-    networks:
-      - observability_net
-      - public_net
-
-
   alloy:
     image: ${ALLOY_IMAGE:-grafana/alloy:latest}
     init: true

@@ -136,6 +136,9 @@ To enable vulnerability scanning, follow the [instructions in the Dockhand docum
 
 ## Run the observability stack
 
+In the Prometheus config change the server IP under `static_configs`
+<!-- # TODO  -->
+
 To run the stack follow the instructions bellow:
 ```bash
 # Check the docker-compose file
@@ -183,6 +186,27 @@ sudo docker compose -f docker-compose.cadvisor.yaml logs -f
 
 After starting the stack wait a few moments for the services to initialize, then open Grafana at `http://{PUBLIC_BIND_IP}:3001/` and check the `cAdvisor: Container Metrics` dashboard.
 
+## Checking Services availability with Blackbox Exporter
+
+[Prometheus Blackbox Exporter](https://github.com/prometheus/blackbox_exporter) is a monitoring component used to check whether services are reachable and behaving correctly from the outside. Unlike exporters that collect internal metrics from an application or host, Blackbox Exporter performs active probes against endpoints using protocols such as HTTP, HTTPS, DNS, TCP, ICMP, and gRPC. This makes it useful for monitoring service availability, response time, status codes, DNS resolution, TCP connectivity, TLS certificate validity, and whether an application is actually reachable from the network.
+
+In a containerized application deployment, Blackbox Exporter can be used to monitor exposed services, APIs, ingress routes, load balancers, internal service endpoints, and external dependencies. For example, in a Docker or Kubernetes environment, it can continuously test whether a web application endpoint returns a successful HTTP response, whether a database port is reachable, or whether an ingress URL is accessible after deployment. When combined with Prometheus alerts and Grafana dashboards, it helps teams detect failed deployments, broken routing, unavailable containers, network issues, slow responses, and certificate problems before they impact users.
+
+To run the stack follow the instructions bellow:
+```bash
+# Check the docker-compose file
+cat docker-compose.blackbox-exporter.yaml
+# Start Blackbox Exporter
+sudo docker compose -f docker-compose.blackbox-exporter.yaml up -d
+# Check the logs
+sudo docker compose -f docker-compose.blackbox-exporter.yaml logs -f
+```
+
+After starting the stack wait a few moments for the services to initialize, then open Grafana at `http://{PUBLIC_BIND_IP}:3001/` and check the `Blackbox Exporter: Services availability` dashboard.
+
+
+
+
 ## Cleaning
 ```bash
 # Stop and remove the Dockhand container
@@ -191,6 +215,8 @@ sudo docker compose -f docker-compose.dockhand.yaml down -v
 sudo docker network rm observability_net
 # Stop and remove the node exporter container
 sudo docker compose -f docker-compose.node-exporter.yaml down -v
+# Stop and remove the cAdvisor container
+sudo docker compose -f docker-compose.cadvisor.yaml down -v
 # Stop and remove the observability stack
 sudo docker compose -f docker-compose.observability-stack.yaml down -v
 ```
