@@ -87,6 +87,10 @@ chmod +x generate_deployment.sh
 # Start the deployment with Docker Compose
 sudo docker compose up
 
+# Search for "Admin password: " in the initialization logs to find the generated admin password for DefectDojo.
+
+# Access the DefectDojo web interface at http://<VM_PUBLIC_IP> and log in with the admin credentials.
+
 # Stop the deployment when done
 sudo docker compose down -v
 ```
