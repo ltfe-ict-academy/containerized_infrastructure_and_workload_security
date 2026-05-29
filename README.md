@@ -21,7 +21,7 @@ A practical orientated course on containerized infrastructure and workload secur
     - **Iptables and basics of the Linux kernel firewall**
     - **Docker networks, overlays, DNS**
     - **Common traps of container networking**
-    - **Hands-on: Setting up a secure networking environment in a variety of configurations**
+    - **Hands-On: Network Hardening**
 
 4. [**Hardening & Defense-in-Depth**](./04_Hardening_and_Defense_in_Depth/README.md)
     - **Container hardening strategies**
