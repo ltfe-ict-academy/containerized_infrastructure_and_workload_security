@@ -192,6 +192,15 @@ sudo docker compose -f docker-compose.falco.yaml logs -f
 
 After starting the stack wait a few moments for the services to initialize, then open Grafana at `http://{PUBLIC_BIND_IP}:3001/` and check the `Falco: Runtime Security Events` dashboard.
 
+## Operational And Security Best Practices
+- Keep observability private. Grafana, Prometheus, Loki, Tempo, cAdvisor, Dockhand, and Portainer are powerful operational interfaces. In production, put them behind SSO, network policy, TLS, and role-based access.
+- Treat the Docker socket as a high-risk control surface. Alloy, Dockhand, Portainer, Docker events, and Falco use the Docker socket or host visibility to inspect the environment. That visibility is useful, but it is also sensitive. Do not expose these services publicly, and do not run untrusted containers on the same host with access to observability credentials.
+- Collect enough data, but not everything forever. Metrics retention, log retention, and trace sampling should match the investigation window you need.
+- Do not log secrets. Centralized logging makes investigation easier, but it also concentrates risk. Avoid printing tokens, database passwords, private keys, authorization headers, or full session cookies. Add redaction at the application, proxy, and collector layers.
+- Alert on behavior, not only availability. CPU and memory alerts are useful, but security teams also need alerts for shell execution, sensitive file access, image pulls from unexpected registries, Docker daemon reloads, repeated restarts, and unexpected `exec` sessions.
+- Pin and verify observability images. In a production baseline, pin versions or digests. Falco official images are signed and can be verified with `cosign`.
+- Monitor the monitoring stack. A stopped log collector, a down Prometheus target, or a broken Falco sensor is itself a security signal. The absence of telemetry should be visible. You can monitor all the services with Grafana at `http://{PUBLIC_BIND_IP}:3001/` and check the `Monitoring Stack: Component Health` dashboard.
+
 
 ## Cleaning the environment
 ```bash
@@ -214,13 +223,3 @@ sudo docker compose -f docker-compose.dockhand.yaml down -v
 # Remove the observability network
 sudo docker network rm observability_net
 ```
-
-## Operational And Security Best Practices
-- Keep observability private. Grafana, Prometheus, Loki, Tempo, cAdvisor, Dockhand, and Portainer are powerful operational interfaces. In production, put them behind SSO, network policy, TLS, and role-based access.
-- Treat the Docker socket as a high-risk control surface. Alloy, Dockhand, Portainer, Docker events, and Falco use the Docker socket or host visibility to inspect the environment. That visibility is useful, but it is also sensitive. Do not expose these services publicly, and do not run untrusted containers on the same host with access to observability credentials.
-- Collect enough data, but not everything forever. Metrics retention, log retention, and trace sampling should match the investigation window you need.
-- Do not log secrets. Centralized logging makes investigation easier, but it also concentrates risk. Avoid printing tokens, database passwords, private keys, authorization headers, or full session cookies. Add redaction at the application, proxy, and collector layers.
-- Alert on behavior, not only availability. CPU and memory alerts are useful, but security teams also need alerts for shell execution, sensitive file access, image pulls from unexpected registries, Docker daemon reloads, repeated restarts, and unexpected `exec` sessions.
-- Pin and verify observability images. In a production baseline, pin versions or digests. Falco official images are signed and can be verified with `cosign`.
-- Monitor the monitoring stack. A stopped log collector, a down Prometheus target, or a broken Falco sensor is itself a security signal. The absence of telemetry should be visible. You can monitor all the services with Grafana at `http://{PUBLIC_BIND_IP}:3001/` and check the `Monitoring Stack: Component Health` dashboard.
-

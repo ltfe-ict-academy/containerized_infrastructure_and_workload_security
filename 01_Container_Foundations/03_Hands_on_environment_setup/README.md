@@ -181,7 +181,7 @@ This first version does many things that are not acceptable in production:
 ### Run the application
 - **Move to the project directory**:
     ```bash
-    cd example_app
+    cd ~/containerized_infrastructure_and_workload_security/01_Container_Foundations/03_Hands_on_environment_setup/example_app
     ```
 - **Build And Start The Stack**
     ```bash
