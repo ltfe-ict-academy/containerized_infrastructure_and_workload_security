@@ -87,7 +87,7 @@ services:
     restart: unless-stopped
 
   isolated:
-    image: ubuntu:24.04
+    image: nicolaka/netshoot
     container_name: isolated
 
     network_mode: "service:tailscale"
@@ -95,12 +95,7 @@ services:
     depends_on:
       - tailscale
 
-    command: >
-      bash -c "
-      apt update &&
-      apt install -y curl iproute2 iputils-ping dnsutils net-tools tcpdump netcat-openbsd &&
-      tail -f /dev/null
-      "
+    command: sleep infinity
 ```
 
 Start the environment.
@@ -140,7 +135,7 @@ Observation:
 Inspect networking from the isolated container.
 
 ```bash
-docker exec -it isolated bash
+docker exec -it isolated sh
 ```
 
 Inside the isolated container.
@@ -204,7 +199,7 @@ nc -l -p 9090
 In another terminal, enter the isolated container.
 
 ```bash
-docker exec -it isolated bash
+docker exec -it isolated sh
 ```
 
 Send traffic to localhost.
@@ -245,7 +240,7 @@ docker compose up -d
 Inside the isolated container, start a listener.
 
 ```bash
-docker exec -it isolated bash
+docker exec -it isolated sh
 ```
 
 Inside:
@@ -295,7 +290,7 @@ tcpdump -i any
 In another terminal, generate traffic from the isolated container.
 
 ```bash
-docker exec -it isolated bash
+docker exec -it isolated sh
 ```
 
 ```sh
@@ -322,7 +317,7 @@ docker stop tailscale
 Attempt outbound connectivity from the isolated container.
 
 ```bash
-docker exec -it isolated bash
+docker exec -it isolated sh
 ```
 
 ```sh
@@ -358,7 +353,7 @@ docker exec tailscale tailscale up --exit-node=<TAILSCALE-IP>
 Verify public IP from the isolated container.
 
 ```bash
-docker exec -it isolated bash
+docker exec -it isolated sh
 ```
 
 ```sh
@@ -413,3 +408,5 @@ typically does not possess its own independent Docker IP address.
 ```bash
 docker compose down
 ```
+
+---
