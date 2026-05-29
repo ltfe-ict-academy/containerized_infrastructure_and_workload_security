@@ -29,4 +29,4 @@ A practical orientated course on containerized infrastructure and workload secur
     - **Hands On: Container Monitoring And Observability**
 
 5. [**Defend The Flag**](./05_Defend_The_Flag/README.md)
-    - **Defend The Flag: Harden A Self-Hosted Plane Deployment**
+    - **Defend The Flag: Harden A Self-Hosted DefectDojo Deployment**
