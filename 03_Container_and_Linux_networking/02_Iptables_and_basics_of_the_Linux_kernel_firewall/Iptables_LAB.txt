@@ -1,0 +1,79 @@
+slide 31:
+$ docker network create app-net
+$ docker run -d --name web --network app-net -p 8080:80 nginx:alpine
+
+$ docker ps --format 'table {{.Names}}\t{{.Ports}}\t{{.Networks}}'
+# NAMES   PORTS                  NETWORKS
+# web     0.0.0.0:8080->80/tcp   app-net
+
+
+slide 32:
+$ curl -I http://127.0.0.1:8080
+# HTTP/1.1 200 OK
+
+$ docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' web
+# 172.18.0.2
+
+$ docker exec web ss -ltnp
+# LISTEN 0.0.0.0:80
+
+
+slide 33:
+$ sudo iptables-save | grep -E '8080|DNAT|MASQUERADE|DOCKER'
+# -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER
+# -A DOCKER ! -i br-xxxx -p tcp -m tcp --dport 8080 \
+#    -j DNAT --to-destination 172.18.0.2:80
+# -A POSTROUTING -s 172.18.0.0/16 ! -o br-xxxx -j MASQUERADE
+
+
+slide 34:
+# terminal 1: capture host port
+$ sudo tcpdump -ni any tcp port 8080
+
+# terminal 2: capture container port on Docker bridge
+$ sudo tcpdump -ni br-xxxx tcp port 80
+
+# terminal 3: generate traffic
+$ curl http://127.0.0.1:8080
+
+
+slide 35:
+$ sudo conntrack -L -p tcp | grep 172.18.0.2
+tcp 6 431999 ESTABLISHED src=127.0.0.1 dst=127.0.0.1 sport=51522 dport=8080
+    src=172.18.0.2 dst=172.18.0.1 sport=80 dport=51522
+
+# exact output depends on source path and Docker settings
+
+
+slide 36:
+# example: allow one source, then drop other forwarded container ingress
+sudo iptables -I DOCKER-USER 1 -s 10.0.0.50 -p tcp --dport 80 -j ACCEPT
+sudo iptables -A DOCKER-USER -p tcp --dport 80 -j DROP
+
+# inspect counters
+sudo iptables -L DOCKER-USER -n -v --line-numbers
+
+
+slide 37:
+$ sudo iptables -L DOCKER-USER -n -v --line-numbers
+
+# delete by line number, starting with the highest number
+$ sudo iptables -D DOCKER-USER 2
+$ sudo iptables -D DOCKER-USER 1
+
+# or flush only if you know this is a lab host
+$ sudo iptables -F DOCKER-USER
+
+
+slide 46: Lab cleanup
+
+$ docker rm -f web client
+$ docker network rm app-net
+
+# remove only lab rules from DOCKER-USER
+$ sudo iptables -L DOCKER-USER -n -v --line-numbers
+$ sudo iptables -D DOCKER-USER <line-number>
+
+# verify
+$ docker ps -a
+$ docker network ls
