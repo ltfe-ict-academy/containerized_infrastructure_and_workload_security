@@ -19,7 +19,6 @@ A practical orientated course on containerized infrastructure and workload secur
 3. [**Container & Linux Networking**](./03_Container_and_Linux_networking/README.md)
     - **Introduction to Linux Networking for Containers**
     - **Iptables and basics of the Linux kernel firewall**
-    - **Docker networks, overlays, DNS**
     - **Common traps of container networking**
     - **Hands-On: Network Hardening**
 
