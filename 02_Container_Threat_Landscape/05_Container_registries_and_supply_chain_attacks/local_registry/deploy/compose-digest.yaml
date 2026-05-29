@@ -1,0 +1,12 @@
+# Lab 2 — deployment that references the image by digest.
+#
+# Replace the digest below with the GOOD_DIGEST captured in Lab 1
+# (your good v1 image digest). The sha256:000... value here is a
+# placeholder and will refuse to pull.
+
+services:
+  payments:
+    # CHANGE ME — paste the GOOD_DIGEST you captured in Lab 1
+    image: localhost:5000/internal/payments@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    pull_policy: always
+    restart: "no"

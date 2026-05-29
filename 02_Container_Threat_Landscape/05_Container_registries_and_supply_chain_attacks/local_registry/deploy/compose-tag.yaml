@@ -1,0 +1,8 @@
+# Lab 2 — deployment that references the image by tag.
+# This is what almost every team does by default. Tag-swappable.
+
+services:
+  payments:
+    image: localhost:5000/internal/payments:prod
+    pull_policy: always           # makes the tag-swap observable
+    restart: "no"

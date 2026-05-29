@@ -1,0 +1,27 @@
+# Local OCI registry used by Lab 1 and Lab 2.
+#
+# This is the upstream docker-distribution registry:2 — the same
+# implementation that backs Docker Hub, GHCR, ECR, GCR, GAR, Quay,
+# Harbor, GitLab, Artifactory and every other "container registry" you
+# have ever pushed to. It speaks the OCI Distribution Spec.
+#
+# Storage is a named volume. Tear it down with:
+#   docker compose down --volumes
+
+services:
+  registry:
+    image: registry:2.8
+    container_name: lab-registry
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5000:5000"          # bind to localhost only
+    environment:
+      # We are deliberately NOT setting REGISTRY_STORAGE_DELETE_ENABLED
+      # so attendees can see "tag swap" behaviour. Production should
+      # set this AND configure the registry's tag-immutability policy.
+      REGISTRY_LOG_LEVEL: warn
+    volumes:
+      - registry-data:/var/lib/registry
+
+volumes:
+  registry-data:
