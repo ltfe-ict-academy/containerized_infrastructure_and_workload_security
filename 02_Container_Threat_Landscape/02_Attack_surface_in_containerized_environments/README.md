@@ -73,40 +73,60 @@ The compromised container may contain environment variables with database creden
 - It may run as root inside the container. 
 - It may have extra Linux capabilities, access to host paths, or in the worst case, access to the Docker socket. In that situation, the container is not just a small isolated box; it becomes a stepping stone into other parts of the system.
 
-Consider a Docker Compose application with a web service, a database, and an admin interface:
-
+Consider a Docker Compose application from our previous example:
 ```yaml
 services:
-  web:
-    image: example-web-app
+  frontend:
+    build:
+      context: ./frontend
     ports:
-      - "8080:8080"
+      - "3000:5173"
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: ./backend
     environment:
-      - DB_HOST=db
-      - DB_USER=app
-      - DB_PASSWORD=devpassword
-    volumes:
-      - ./app:/app
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      ENABLE_DEBUG_ROUTES: "true"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
 
   db:
-    image: postgres
+    image: postgres:18
     environment:
-      - POSTGRES_PASSWORD=devpassword
-
-  admin:
-    image: adminer
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "9000:8080"
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+
+  redis:
+    image: redis:8
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:
+
 ```
 
-But from an attack surface perspective, several important questions appear:
-- The web application is exposed on port 8080. 
-- The admin interface is also exposed on port 9000. 
-- The web container contains database credentials in environment variables. 
-- The source code is mounted from the host into the container. 
-- The web container can likely reach the database by using the hostname db.
+From an attack surface perspective, several important questions appear:
+- The frontend application is exposed on port 3000. 
+- The API interface is also exposed on port 8000. 
+- The backend container contains database credentials in environment variables.
+- Redis and database are exposed publicly on ports 6379 and 5432.
+- The frontend container can likely reach the database by using the hostname db.
 
-Now imagine the web application is compromised. The attacker may be able to inspect the container environment, recover the database password, connect to the database over the internal Docker network, and access or modify application data. If the mounted `./app:/app` directory is writable, the attacker may also be able to modify application code on the host through the container. The original vulnerability was still just a web application bug, but container configuration changed the blast radius.
+Now imagine the web application is compromised. The attacker may be able to inspect the container environment, recover the database password, connect to the database over the internal Docker network, and access or modify application data. The original vulnerability was still just a web application bug, but container configuration changed the blast radius.
 
 This is the main reason containers change the attack surface: they introduce additional layers, boundaries, and control points. We now have to think not only about the application, but also about the image, runtime configuration, Docker daemon, mounted volumes, container networks, secrets, host interaction, and build process. Each of these can either reduce risk or accidentally create a new path for an attacker.
 
