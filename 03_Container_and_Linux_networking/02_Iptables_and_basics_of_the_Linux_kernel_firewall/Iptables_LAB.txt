@@ -14,7 +14,7 @@ $ curl -I http://127.0.0.1:8080
 $ docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' web
 # 172.18.0.2
 
-$ docker exec web ss -ltnp
+$ docker exec web netstat -ltnp
 # LISTEN 0.0.0.0:80
 
 
@@ -67,7 +67,7 @@ $ sudo iptables -F DOCKER-USER
 
 slide 46: Lab cleanup
 
-$ docker rm -f web client
+$ docker rm -f web
 $ docker network rm app-net
 
 # remove only lab rules from DOCKER-USER
