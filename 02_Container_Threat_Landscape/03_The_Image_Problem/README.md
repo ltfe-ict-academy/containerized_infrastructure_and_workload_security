@@ -1459,7 +1459,7 @@ Dockerscan is useful to mention in training because it focuses not only on packa
 
 Typical usage will depend on the version installed, but conceptually:
 ```bash
-# Linux installation example - https://github.com/cr0hn/dockerscan?utm_source=chatgpt.com#-installation
+# Linux installation example - https://github.com/cr0hn/dockerscan
 curl -L https://github.com/cr0hn/dockerscan/releases/latest/download/dockerscan-linux-amd64 -o dockerscan
 chmod +x dockerscan
 sudo mv dockerscan /usr/local/bin/
