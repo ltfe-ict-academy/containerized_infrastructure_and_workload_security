@@ -204,6 +204,28 @@ cat /sys/fs/cgroup/mygroup/memory.max # 98304
 echo 1234 >> /sys/fs/cgroup/mygroup/cgroup.procs
 ```
 
+Example of OOK kill:
+
+```bash
+# create cgroup
+mkdir -p /sys/fs/cgroup/mygroup
+
+# set memory limit to 50 MiB
+echo $((50 * 1024 * 1024)) > /sys/fs/cgroup/mygroup/memory.max
+
+# optional: disable swap for this cgroup, if available
+echo 0 > /sys/fs/cgroup/mygroup/memory.swap.max 2>/dev/null || true
+
+# check limits
+cat /sys/fs/cgroup/mygroup/memory.max
+cat /sys/fs/cgroup/mygroup/memory.current
+
+# kill demo
+bash -c 'echo $$ > /sys/fs/cgroup/mygroup/cgroup.procs; python3 -c "a=bytearray(200*1024*1024); input(\"allocated\\n\")"'
+# or
+bash -c 'echo $$ > /sys/fs/cgroup/mygroup/cgroup.procs; dd if=/dev/zero of=/dev/null bs=200M count=1'
+```
+
 > Note: you can get page size using `getconf PAGE_SIZE`. You can remove group if has no tasks inside with `rmdir`, not `rm`.
 
 > Note that these changes are not persistent! For persistent configuration, you would typically use a boot-time script or a daemon like systemd. The default `libcgroup` configuration file is `/etc/cgconfig.conf`, however that may vary by distribution. Some cgroup features may require kernel boot arguments.
