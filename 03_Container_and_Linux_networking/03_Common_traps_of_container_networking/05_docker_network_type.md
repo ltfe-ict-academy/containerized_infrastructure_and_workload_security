@@ -340,58 +340,298 @@ Macvlan and ipvlan are used when containers need to appear more directly on the 
 
 **Security consequence:** these drivers move enforcement responsibility outward. The container may need to be visible to network inventory, switch policy, VLAN ACLs, cloud routing, and external monitoring instead of relying on host-local Docker bridge assumptions.
 
-### Red-Team Practical
+### Practical: Safe Local Macvlan Lab
 
-Do not run this unless you understand your lab network and have a safe subnet. Replace the subnet, gateway, and parent interface with values appropriate for your lab.
+This lab creates a fake LAN on the host instead of using the real physical or public interface. A Linux bridge acts like a small switch. A network namespace acts like an external client. The Docker macvlan network attaches the container to that fake LAN.
 
-```bash
-ip addr
+Topology.
+
+```text
+mv-client namespace 10.90.0.10/24
+        |
+      veth
+        |
+br-mvlab Linux bridge
+        |
+Docker macvlan container 10.90.0.50/24
 ```
 
-Example macvlan network creation.
+Clean up any previous run.
+
+```bash
+docker rm -f macvlan-web 2>/dev/null || true
+docker network rm macvlan-lab 2>/dev/null || true
+sudo ip netns del mv-client 2>/dev/null || true
+sudo ip link del br-mvlab 2>/dev/null || true
+```
+
+Create the fake LAN and external client.
+
+```bash
+sudo ip link add br-mvlab type bridge
+sudo ip link set br-mvlab up
+
+sudo ip netns add mv-client
+sudo ip link add mv-host type veth peer name mv-ns
+sudo ip link set mv-host master br-mvlab
+sudo ip link set mv-host up
+sudo ip link set mv-ns netns mv-client
+
+sudo ip netns exec mv-client ip addr add 10.90.0.10/24 dev mv-ns
+sudo ip netns exec mv-client ip link set lo up
+sudo ip netns exec mv-client ip link set mv-ns up
+```
+
+Create the macvlan network on the fake bridge.
 
 ```bash
 docker network create -d macvlan \
-  --subnet=192.168.56.0/24 \
-  --gateway=192.168.56.1 \
-  -o parent=eth0 \
+  --subnet=10.90.0.0/24 \
+  -o parent=br-mvlab \
   macvlan-lab
 ```
 
-Run a container with a LAN IP.
+Run a container with a fake-LAN IP.
 
 ```bash
 docker run -d \
   --name macvlan-web \
   --network macvlan-lab \
-  --ip 192.168.56.50 \
+  --ip 10.90.0.50 \
   nginx:alpine
 ```
 
-From another host on the lab network.
+Test from the external-client namespace.
 
 ```bash
-curl -I http://192.168.56.50
+sudo ip netns exec mv-client curl -I --max-time 5 http://10.90.0.50
 ```
 
-Attacker perspective: the container may appear as a normal network endpoint.
+Expected result: the namespace receives an HTTP response from nginx. The important point is that the client connects directly to the container IP. No Docker host port is published.
 
-### Blue-Team Practical
-
-Inspect the Docker network.
+Inspect what the client learned at Layer 2.
 
 ```bash
-docker network inspect macvlan-lab
+sudo ip netns exec mv-client ip neigh show
+docker inspect macvlan-web \
+  --format '{{range .NetworkSettings.Networks}}IP={{.IPAddress}} MAC={{.MacAddress}}{{end}}'
 ```
 
-Review whether the container appears in network inventory, whether it is subject to VLAN ACLs, and whether host-level firewall logging sees the traffic. If your environment is not appropriate for macvlan, present this as a whiteboard exercise rather than a live demo.
+Expected result: the client neighbor table shows `10.90.0.50` with a MAC address, and `docker inspect` shows the same MAC for the macvlan container. This demonstrates the macvlan model: the container appears as a distinct Layer 2 endpoint on the attached network.
+
+### Firewall Observation
+
+Macvlan traffic does not look like a normal Docker bridge published-port path. There is no `-p` mapping, no Docker DNAT to a bridge container, and the traffic does not rely on the `DOCKER-USER` chain in the way Chapter 2's bridge-port example does.
+
+Zero counters, make a request, and inspect the Docker chains.
+
+```bash
+sudo iptables -Z DOCKER-USER 2>/dev/null || true
+sudo ip netns exec mv-client curl -I --max-time 5 http://10.90.0.50
+sudo iptables -L DOCKER-USER -n -v --line-numbers 2>/dev/null || true
+sudo iptables -t nat -L DOCKER -n -v --line-numbers 2>/dev/null || true
+```
+
+Expected result: on a normal Linux Docker host, `DOCKER-USER` and Docker NAT counters should not explain this request. Defensive interpretation: with macvlan, exposure is controlled more by IP reachability, parent-interface policy, upstream ACLs, and network inventory than by Docker port publishing.
+
+Attacker perspective: the container is reached as a network endpoint, not as `host:published-port`.
+
+Blue-team perspective: inventory and firewall review must include the container IP itself.
 
 Cleanup.
 
 ```bash
 docker rm -f macvlan-web
 docker network rm macvlan-lab
+sudo ip netns del mv-client
+sudo ip link del br-mvlab
 ```
+
+
+## 5.7 IPvlan Networks
+
+### Theory
+
+IPvlan deserves separate treatment because it solves a different operational problem than macvlan. Macvlan gives containers distinct MAC addresses on the parent network. IPvlan keeps container traffic behind the parent interface's MAC address and separates endpoints primarily by IP. That difference matters in virtualized, cloud, hosting, and switch-controlled environments where multiple source MAC addresses on one port may be blocked, rate-limited, or treated as suspicious.
+
+IPvlan has two modes that are useful to explain clearly.
+
+In IPvlan L2 mode, containers live in the same Layer 2 network as the parent interface. They use IP addresses from the attached network, but they do not create additional visible MAC addresses. This can be useful where the upstream network allows extra IP addresses but does not allow extra MAC addresses.
+
+In IPvlan L3 mode, containers live behind the host as routed IP endpoints. The upstream network must know how to route the container subnet back to the Docker host. This is closer to a routed container network than a LAN attachment. It is often the cleaner design when the provider or network team can route a dedicated prefix to the host.
+
+**Mechanism:** ipvlan attaches containers to a parent interface while sharing the parent interface's MAC address. L2 mode makes container IPs participate on the parent Layer 2 network. L3 mode requires routing for the container subnet and avoids depending on broadcast or neighbor discovery in the same way.
+
+**Security consequence:** ipvlan can bypass the mental model of "container is hidden behind Docker bridge NAT." If a container receives a routable address, it may be reachable directly. Published Docker ports may no longer be the only exposure path. The host firewall, upstream ACLs, provider firewall, route tables, and monitoring all need to be reviewed together.
+
+### Public-Interface Framing
+
+Using macvlan or ipvlan on a public interface is possible only when the addressing and upstream network support it. Do not move the host's only public IP address into a container. The host still needs its own management address, default route, and control-plane reachability.
+
+For macvlan on a public interface, the provider or switch must allow multiple MAC addresses on the same virtual or physical port. Many VPS and cloud networks do not allow this, so macvlan may fail even when the Docker configuration is correct.
+
+For ipvlan L2 on a public interface, multiple container IPs can share the host interface MAC. This may work in environments where extra MAC addresses are blocked but extra IP addresses are permitted. The provider must still allow those additional IP addresses to be used on that interface.
+
+For ipvlan L3 on a public interface, the clean model is a routed public prefix. The provider routes a subnet to the Docker host, and the host routes traffic to containers through the ipvlan network. This is usually better than trying to make individual containers pretend to be normal hosts on a public LAN.
+
+Defensive framing: a public macvlan or ipvlan container should be treated as internet-facing infrastructure, not as an internal Docker workload. Inventory, patching, service binding, upstream firewall rules, logging, and incident response all need to include the container IPs.
+
+### Practical: Safe Local IPvlan L2 Lab
+
+This lab mirrors the macvlan lab, but uses ipvlan L2. It uses a fake veth link instead of the real public interface. The host-side veth is the ipvlan parent, and the namespace-side veth is the external client.
+
+Topology.
+
+```text
+iv-client namespace 10.91.0.10/24
+        |
+     veth pair
+        |
+iv-parent host interface
+        |
+Docker ipvlan L2 container 10.91.0.50/24
+```
+
+Clean up any previous run.
+
+```bash
+docker rm -f ipvlan-l2-web 2>/dev/null || true
+docker network rm ipvlan-l2-lab 2>/dev/null || true
+sudo ip netns del iv-client 2>/dev/null || true
+sudo ip link del iv-parent 2>/dev/null || true
+```
+
+Create the fake parent link and external client.
+
+```bash
+sudo ip netns add iv-client
+sudo ip link add iv-parent type veth peer name iv-ns
+sudo ip link set iv-ns netns iv-client
+sudo ip link set iv-parent up
+
+sudo ip netns exec iv-client ip addr add 10.91.0.10/24 dev iv-ns
+sudo ip netns exec iv-client ip link set lo up
+sudo ip netns exec iv-client ip link set iv-ns up
+```
+
+Create the ipvlan L2 network on the host-side veth parent.
+
+```bash
+docker network create -d ipvlan \
+  --subnet=10.91.0.0/24 \
+  -o parent=iv-parent \
+  -o ipvlan_mode=l2 \
+  ipvlan-l2-lab
+```
+
+Run a container with a fake-LAN IP.
+
+```bash
+docker run -d \
+  --name ipvlan-l2-web \
+  --network ipvlan-l2-lab \
+  --ip 10.91.0.50 \
+  nginx:alpine
+```
+
+Test from the external-client namespace.
+
+```bash
+sudo ip netns exec iv-client curl -I --max-time 5 http://10.91.0.50
+```
+
+Expected result: the namespace receives an HTTP response from nginx. Again, no Docker host port is published.
+
+Inspect the Layer 2 difference from macvlan.
+
+```bash
+sudo ip netns exec iv-client ip neigh show
+ip -brief link show iv-parent
+docker inspect ipvlan-l2-web \
+  --format '{{range .NetworkSettings.Networks}}IP={{.IPAddress}} MAC={{.MacAddress}}{{end}}'
+```
+
+Expected result: the client neighbor table shows `10.91.0.50` using the `iv-parent` MAC, while Docker does not report a separate container MAC in the same way as the macvlan example. This demonstrates the ipvlan L2 model: the container has its own IP, but traffic is associated with the parent interface MAC.
+
+Troubleshooting note: if `ip addr` inside the container shows `LOWERLAYERDOWN`, inspect the parent path before assuming ipvlan is broken.
+
+```bash
+ip -brief link show iv-parent
+sudo ip netns exec iv-client ip -brief link
+sudo ip netns exec iv-client ip neigh show
+sudo ip netns exec iv-client curl -I --max-time 5 http://10.91.0.50
+```
+
+The parent interface should be `UP` and should show `LOWER_UP`. If the parent was created after the Docker network, is down, or was deleted/recreated after the Docker network was created, the ipvlan interface may report a lower-layer state that looks alarming and reachability may fail. The decisive test is reachability from `iv-client` to `10.91.0.50` plus the neighbor-table observation. If reachability fails, recreate the lab in this order: namespace, veth pair, parent up, namespace address up, Docker ipvlan network, container.
+
+### Firewall Observation
+
+Repeat the same counter check.
+
+```bash
+sudo iptables -Z DOCKER-USER 2>/dev/null || true
+sudo ip netns exec iv-client curl -I --max-time 5 http://10.91.0.50
+sudo iptables -L DOCKER-USER -n -v --line-numbers 2>/dev/null || true
+sudo iptables -t nat -L DOCKER -n -v --line-numbers 2>/dev/null || true
+```
+
+Expected result: this direct ipvlan L2 request is not explained by Docker bridge DNAT or the normal published-port path. Defensive interpretation: ipvlan L2 shifts the review toward direct IP reachability, parent-interface policy, upstream routing, and upstream firewall controls.
+
+Cleanup.
+
+```bash
+docker rm -f ipvlan-l2-web
+docker network rm ipvlan-l2-lab
+sudo ip netns del iv-client
+sudo ip link del iv-parent
+```
+
+### IPvlan L3 Framing
+
+IPvlan L3 is still worth discussing, but it is better as a routed-design explanation unless the classroom environment has an explicit routed prefix.
+
+In a real IPvlan L3 design, the upstream network has a route like this.
+
+```text
+<container-routed-prefix> via <docker-host-parent-ip>
+```
+
+Docker then creates an ipvlan L3 network using that routed prefix.
+
+```bash
+docker network create -d ipvlan \
+  --subnet=<container-routed-prefix> \
+  -o parent=<parent-interface> \
+  -o ipvlan_mode=l3 \
+  ipvlan-l3-lab
+```
+
+Expected interpretation: if routing is correct, the container is reachable by its own IP without Docker port publishing. If routing is missing, the container may work locally but fail from the outside because return traffic has no valid path.
+
+### Red-Team Practical
+
+Map the difference between published-port exposure and direct-IP exposure.
+
+```bash
+docker ps
+docker network inspect ipvlan-l2-lab 2>/dev/null || true
+docker network inspect ipvlan-l3-lab 2>/dev/null || true
+```
+
+Attacker perspective: if a container has a routable IP, scanning the host's published ports is not enough. The container address itself becomes part of the attack surface.
+
+### Blue-Team Practical
+
+Build a short exposure review for every ipvlan deployment.
+
+```bash
+docker network ls
+docker network inspect <ipvlan-network>
+ip route
+ip neigh
+```
+
+Review whether the container IPs are public or private, whether the upstream route is intentional, which firewall enforces ingress, whether egress is logged, and whether asset inventory includes those addresses. Defensive interpretation: ipvlan is not insecure by default, but it is easy to under-monitor because traffic may not look like ordinary Docker bridge traffic.
 
 
 ## 5.7 IPv6, Direct Routing, and Gateway Modes
