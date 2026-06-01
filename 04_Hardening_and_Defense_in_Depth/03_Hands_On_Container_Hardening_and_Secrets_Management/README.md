@@ -1,4 +1,4 @@
-## Hands On: Containers Hardening & Secrets Management
+# Hands On: Containers Hardening & Secrets Management
 
 This version starts from the already image-hardened and network-hardened application. The public entry point is still the reverse proxy, and the segmented Docker networks from the previous chapter remain in place. The new work is runtime hardening: how the containers are started, what privileges they receive, where they can write, how they consume secrets, and how Docker decides whether each service is healthy.
 
