@@ -38,6 +38,21 @@ By the end of this hands-on, you should be able to:
 - explain the **dependency cooldown** principle and why "patch immediately" is half the answer
 - name four major supply-chain incidents of 2024–2026 and what defence would have blocked each
 
+## The Mental Model — Four Pillars
+
+Every meaningful statement about a container image hangs off four artifacts.
+
+| Pillar         | Tells you…                 | Produced by           | Format              | Checked by                                                                 |
+| -------------- | -------------------------- | --------------------- | ------------------- | -------------------------------------------------------------------------- |
+| **Image**      | "this is the running code" | the build             | OCI image manifest  | digest comparison (`docker pull` enforces it; `crane`/`skopeo` inspect it) |
+| **SBOM**       | _what is in_ the image     | build or scanner      | SPDX / CycloneDX    | `grype sbom:…`, `trivy sbom …`, Dependency-Track, DefectDojo               |
+| **Signature**  | _who_ put the image there  | signing identity (CI) | Sigstore / Notation | `cosign verify` (image), `cosign verify-blob` (file), `notation verify`    |
+| **Provenance** | _how_ the image was built  | build platform        | SLSA / in-toto      | `cosign verify-attestation`, `slsa-verifier`, `gh attestation verify`      |
+
+You need **all four** for meaningful supply-chain integrity. The image alone is just bytes. The SBOM without a signature is just a list anyone could forge. The signature without a provenance attestation only proves "someone we trust ran a build," not "they built it from the source we expect." This is the framework you will hear repeated under various names — **SLSA**, **SSDF**, **EO 14028**, **EU CRA** — they are all asking for the same four artifacts plus a way to verify them.
+
+Module 2.3 (The Image Problem) covered _what is inside_ an image. This module covers _how it got to production_ and _how you prove that_.
+
 ## Prerequisites — Standalone Setup
 
 This module assumes only:
@@ -83,21 +98,6 @@ Towards: The Trivy GitHub release page ships **four extra files per artifact** s
 | `…tar.gz.pem`                                                            | Signing certificate (Fulcio-issued, short-lived, embeds the OIDC identity that signed).         |
 | `…tar.gz.sigstore.json`                                                  | Newer Sigstore "bundle": signature + cert + Rekor entry + in-toto attestation, all in one file. |
 | `trivy_<ver>_checksums.txt` (and an SBOM `bom.json` shipped per release) | SHA-256 checksums and a CycloneDX SBOM of the released binary.                                  |
-
-## The Mental Model — Four Pillars
-
-Every meaningful statement about a container image hangs off four artifacts.
-
-| Pillar         | Tells you…                 | Produced by           | Format              | Checked by                                                                 |
-| -------------- | -------------------------- | --------------------- | ------------------- | -------------------------------------------------------------------------- |
-| **Image**      | "this is the running code" | the build             | OCI image manifest  | digest comparison (`docker pull` enforces it; `crane`/`skopeo` inspect it) |
-| **SBOM**       | _what is in_ the image     | build or scanner      | SPDX / CycloneDX    | `grype sbom:…`, `trivy sbom …`, Dependency-Track, DefectDojo               |
-| **Signature**  | _who_ put the image there  | signing identity (CI) | Sigstore / Notation | `cosign verify` (image), `cosign verify-blob` (file), `notation verify`    |
-| **Provenance** | _how_ the image was built  | build platform        | SLSA / in-toto      | `cosign verify-attestation`, `slsa-verifier`, `gh attestation verify`      |
-
-You need **all four** for meaningful supply-chain integrity. The image alone is just bytes. The SBOM without a signature is just a list anyone could forge. The signature without a provenance attestation only proves "someone we trust ran a build," not "they built it from the source we expect." This is the framework you will hear repeated under various names — **SLSA**, **SSDF**, **EO 14028**, **EU CRA** — they are all asking for the same four artifacts plus a way to verify them.
-
-Module 2.3 (The Image Problem) covered _what is inside_ an image. This module covers _how it got to production_ and _how you prove that_.
 
 ## Tags, Digests, and Why Both Tag Kinds Are Lies
 
