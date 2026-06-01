@@ -6,10 +6,23 @@ Before installing Docker, it is useful to understand that “containers” are n
 
 | Tool             | Main role            | Notes               |
 | ------------- | ------------------- | -------------------- |
-| **Docker**                              | General-purpose container platform for building, running, and sharing containers | Very common in development, education, CI/CD, and cloud-native workflows. Includes a large ecosystem around Dockerfiles, images, Compose, registries, and developer tooling.        |
-| **Podman**                              | Docker-compatible container engine with a daemonless architecture                | Often used as an alternative to Docker, especially on Linux systems and in security-conscious environments. It supports rootless containers and can run many Docker-style commands. |
-| **containerd**                          | Core container runtime used by higher-level platforms                                                      | Docker uses containerd under the hood for container lifecycle operations such as creating, starting, and stopping containers. Kubernetes can also use containerd directly as its runtime, without Docker in between. Beginners usually interact with Docker rather than containerd directly.                       |
-| **nerdctl**                             | Docker-compatible CLI for containerd                                             | Useful for working more directly with containerd while keeping a Docker-like command-line experience.                                                                               |
+| **[Docker - The Moby Project](https://github.com/moby/moby)**                              | Open-source container engine and runtime platform | The upstream project behind Docker Engine. Implements container lifecycle management, image distribution, networking, and storage capabilities. Forms the core runtime used by Docker and many container-based development and deployment workflows.    |
+| **[Podman](https://github.com/containers/podman)**                              | Docker-compatible container engine with a daemonless architecture                | Docker-compatible container engine with a daemonless architecture. Uses libpod and conmon rather than containerd, supports rootless containers, and can run many Docker-style commands. |
+| **[containerd](https://github.com/containerd/containerd)**                          | Core container runtime used by higher-level platforms                                                      | Docker uses containerd under the hood for container lifecycle operations such as creating, starting, and stopping containers. Kubernetes can also use containerd directly as its runtime, without Docker in between. Beginners usually interact with Docker rather than containerd directly.                       |
+| **[nerdctl](https://github.com/containerd/nerdctl)**                             | Docker-compatible CLI for containerd                                             | Useful for working more directly with containerd while keeping a Docker-like command-line experience.        |
+
+
+Key diferences between these toolss:
+
+| Tool                     | Main role                            | Uses containerd? | Architecture / layer                                          | Notes                                                                                                                                     |
+| ------------------------ | ------------------------------------ | ---------------: | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| **Docker Engine / Moby** | Full container engine                |            ✅ Yes | High-level engine above containerd                            | Uses `dockerd`, which manages containers through `containerd`. Most beginner-friendly and ecosystem-rich option.                          |
+| **Podman**               | Docker-compatible container engine   |             ❌ No | High-level engine using `libpod`, `conmon`, and `runc`/`crun` | Daemonless by default, strong rootless support, often used as a Docker Engine alternative.                                                |
+| **containerd**           | Core container runtime               |                — | Lower-level runtime manager                                   | Manages container lifecycle, images, snapshots, and execution. Used by Docker and Kubernetes, but usually not used directly by beginners. |
+| **nerdctl**              | Docker-compatible CLI for containerd |            ✅ Yes | CLI directly on top of containerd                             | Gives containerd a Docker-like command-line experience. Useful when you want Docker-style commands without Docker Engine.                 |
+
+
+
 
 For this course, we will use Docker as the main hands-on platform. Docker is a good starting point because it gives us a complete and beginner-friendly workflow. Using Docker does not mean that other tools are less important. In fact, tools such as Podman, containerd, and Kubernetes are highly relevant in real-world environments. However, Docker provides the simplest entry point for learning the core ideas that apply across the container ecosystem:
 - images and containers
