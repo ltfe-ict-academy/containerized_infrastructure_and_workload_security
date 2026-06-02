@@ -75,8 +75,12 @@ Create a local `.env` file for the lab runtime only:
 cp example_app_final/.env.example example_app_final/.env
 ```
 
+Change the `SERVER_IP=<IP_ADDRESS>` line to match your host's IP address. This allows the frontend to reach the backend when running with Compose.
+
 Build the final images:
 ```bash
+cd /home/administrator/containerized_infrastructure_and_workload_security/02_Container_Threat_Landscape/04_Hands_on_image_hardening
+
 sudo docker buildx build --load --build-arg UV_VERSION=0.11.15   --build-arg UV_INDEX_URL="https://pypi.org/simple"   --build-arg APP_UID=10001 --build-arg APP_GID=10001   -t course/backend:final ./example_app_final/backend
 
 sudo docker buildx build --load --build-arg VITE_API_BASE_URL="http://localhost:8000/api"  -t course/frontend:final ./example_app_final/frontend
@@ -111,6 +115,15 @@ CHECKOV_EXTRA_ARGS="--skip-check CKV_DOCKER_2" ./tools/lint-final-dockerfiles.sh
 Install Grype:
 ```bash
 curl -sSfL https://get.anchore.io/grype | sudo sh -s -- -b /usr/local/bin
+```
+
+Install Trivy if you have not already:
+```bash
+sudo apt-get install wget gnupg
+wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+sudo apt-get update
+sudo apt-get install trivy
 ```
 
 Run all scanners against both before and after images:
