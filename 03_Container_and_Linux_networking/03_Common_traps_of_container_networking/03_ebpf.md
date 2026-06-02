@@ -35,7 +35,7 @@ cat > tetragon-network-egress.yaml <<'YAML'
 apiVersion: cilium.io/v1alpha1
 kind: TracingPolicy
 metadata:
-  name: "docker-network-egress-observability"
+  name: "docker-default-bridge-tcp"
 spec:
   kprobes:
   - call: "tcp_connect"
@@ -46,9 +46,41 @@ spec:
     selectors:
     - matchArgs:
       - index: 0
-        operator: "NotDAddr"
+        operator: "SAddr"
         values:
-        - 127.0.0.1
+        - "172.17.0.0/16"
+      matchActions:
+      - action: Post
+
+  - call: "tcp_sendmsg"
+    syscall: false
+    args:
+    - index: 0
+      type: "sock"
+    - index: 2
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "SAddr"
+        values:
+        - "172.17.0.0/16"
+      matchActions:
+      - action: Post
+
+  - call: "tcp_close"
+    syscall: false
+    args:
+    - index: 0
+      type: "sock"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "SAddr"
+        values:
+        - "172.17.0.0/16"
+      matchActions:
+      - action: Post
 YAML
 ```
 
