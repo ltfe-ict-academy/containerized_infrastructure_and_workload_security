@@ -2,67 +2,61 @@
 
 ## Theory
 
-Modern containerized VPN deployments commonly use a sidecar networking model. One container runs the VPN client and owns the network namespace, while one or more application containers share that namespace. In Docker CLI, this is done with:
+VPN sidecars are a common pattern for routing container traffic through a secure tunnel. Instead of giving every application container its own VPN client, one container runs the VPN software and owns the network namespace. Other containers share that namespace.
+
+Docker CLI uses:
 
 ```bash
 --network container:<vpn-container>
 ```
 
-In Docker Compose, this is commonly implemented as:
+Docker Compose uses:
 
 ```yaml
-network_mode: "service:vpn"
+network_mode: "service:tailscale"
 ```
 
-In this chapter, the VPN sidecar is implemented using Tailscale, a WireGuard-based mesh VPN platform. The application container does not have its own network stack. Instead, it inherits the VPN container’s interfaces, routes, DNS behavior, localhost, firewall rules, and VPN tunnel interfaces.
+In this model, the application container does not receive its own interfaces, routes, DNS configuration, or localhost. It inherits all networking from the VPN container.
 
-This architecture is widely used in:
+**Mechanism:** namespace-sharing containers use the same Linux network namespace. Interfaces, routing tables, DNS settings, listening sockets, localhost, firewall rules, and VPN tunnel interfaces are shared.
 
-* homelabs
-* self-hosted services
-* remote-access gateways
-* zero-trust deployments
-* security-sensitive workloads
+**Security consequence:** the VPN container becomes an egress gateway, routing policy, DNS policy, firewall boundary, and observability boundary. A compromised application container can interact with localhost services and network paths that exist inside the shared namespace.
 
-The important security implication is that the application container is not network-isolated from the VPN container. They share:
+Common risks include:
 
-* interfaces
-* routes
-* localhost (`127.0.0.1`)
-* listening sockets
-* DNS configuration
-* Tailscale interfaces
-* firewall behavior
+* shared localhost access
+* unintended DNS leakage
+* incorrect port publishing assumptions
+* tunnel bypass during VPN failures
+* reduced visibility when ownership is unclear
 
-This means:
-
-* localhost is shared
-* DNS leaks become possible if improperly configured
-* published ports belong to the VPN namespace owner
-* all traffic routing decisions occur in the VPN namespace
-* if the VPN fails and no kill-switch exists, traffic leakage may occur
-
-A VPN sidecar is therefore not merely a privacy feature. It is:
-
-* an egress gateway
-* a namespace boundary
-* a routing policy
-* a DNS policy
-* a firewall policy
-* an observability boundary
+This chapter uses Tailscale as the VPN sidecar because it is widely deployed and demonstrates the pattern clearly.
 
 ---
 
-## Red-Team Practical: Demonstrate Shared VPN Namespace
+## Environment Preparation
 
-Create a Docker Compose deployment with:
+Create a dedicated lab directory.
 
-* a Tailscale VPN container
-* an isolated application container sharing its namespace
+```bash
+mkdir -p ~/docker-network-security-lab/ch08-vpn
+cd ~/docker-network-security-lab/ch08-vpn
+```
 
-### docker-compose.yml
+Create a state directory for Tailscale.
 
-```yaml
+```bash
+mkdir -p tailscale-state
+```
+
+---
+
+## Blue-Team Practical: Build a VPN Sidecar Environment
+
+Create `compose-vpn.yml`.
+
+```bash
+cat > compose-vpn.yml <<'YAML'
 services:
   tailscale:
     image: tailscale/tailscale:latest
@@ -76,90 +70,104 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
 
+    environment:
+      TS_STATE_DIR: /var/lib/tailscale
+
     volumes:
       - ./tailscale-state:/var/lib/tailscale
-
-    environment:
-      - TS_STATE_DIR=/var/lib/tailscale
 
     command: tailscaled
 
     restart: unless-stopped
 
-  isolated:
-    image: nicolaka/netshoot
-    container_name: isolated
+  app:
+    image: ubuntu:24.04
+    container_name: vpn-app
 
     network_mode: "service:tailscale"
 
     depends_on:
       - tailscale
 
-    command: sleep infinity
+    command:
+      - bash
+      - -c
+      - |
+        apt update &&
+        apt install -y \
+          curl \
+          iproute2 \
+          iputils-ping \
+          dnsutils \
+          netcat-openbsd \
+          tcpdump &&
+        tail -f /dev/null
+YAML
 ```
 
 Start the environment.
 
 ```bash
-docker compose up -d
+docker compose -f compose-vpn.yml up -d
 ```
 
-Authenticate Tailscale.
+Verify containers.
+
+```bash
+docker ps --filter name=tailscale
+docker ps --filter name=vpn-app
+```
+
+Observation: the application container starts without its own Docker network attachment and instead shares the Tailscale namespace.
+
+---
+
+## Blue-Team Practical: Authenticate the VPN
+
+Interactive authentication.
 
 ```bash
 docker exec tailscale tailscale up
 ```
 
-Or with an auth key.
+Or use an auth key.
 
 ```bash
-docker exec tailscale tailscale up --authkey=tskey-auth-xxxxxxxx
+docker exec tailscale \
+  tailscale up \
+  --authkey=tskey-auth-xxxxxxxx
 ```
 
-Verify Tailscale connectivity.
+Verify status.
 
 ```bash
 docker exec tailscale tailscale status
 ```
 
-Observation:
+Observation: Tailscale reports an assigned address and visible peers.
 
-* Tailscale IP assigned
-* online status
-* peers visible
+Defensive interpretation: the VPN container now owns the network namespace used by both containers.
 
 ---
 
-## Red-Team Practical: Demonstrate Shared Interfaces
+## Red-Team Practical: Verify Shared Interfaces and Routes
 
-Inspect networking from the isolated container.
+Inspect networking from the application container.
 
 ```bash
-docker exec -it isolated sh
+docker exec -it vpn-app bash
 ```
 
-Inside the isolated container.
+Inside the container:
 
 ```bash
 ip addr
 ip route
 cat /etc/resolv.conf
+exit
 ```
 
-Observe:
-
-* `tailscale0` interface exists
-* routes belong to the shared namespace
-* DNS configuration is inherited from the VPN namespace
-
-Example output snippet.
-
-```text
-tailscale0:
-inet 100.x.x.x/32
-```
-
-Compare with the VPN container.
+Inspect the VPN container.
 
 ```bash
 docker exec tailscale ip addr
@@ -167,86 +175,105 @@ docker exec tailscale ip route
 docker exec tailscale cat /etc/resolv.conf
 ```
 
-Observation:
+Observation: interfaces, routes, and DNS configuration are identical.
 
-* both containers display the same interfaces and routes
-
-Attacker perspective: the isolated container does not possess an independent network namespace.
+Attacker perspective: the application container does not have an independent network stack.
 
 ---
 
 ## Red-Team Practical: Demonstrate Shared Localhost
 
-Enter the VPN container.
+Start a listener inside the VPN container.
 
 ```bash
-docker exec -it tailscale sh
-```
-
-Install netcat if necessary.
-
-```sh
-apk update
-apk add netcat-openbsd
-```
-
-Start a localhost listener.
-
-```sh
+docker exec tailscale sh -c '
+apk update &&
+apk add netcat-openbsd &&
 nc -l -p 9090
+'
 ```
 
-In another terminal, enter the isolated container.
+In another terminal, send traffic from the application container.
 
 ```bash
-docker exec -it isolated sh
+docker exec vpn-app bash -c \
+'echo "shared localhost test" | nc 127.0.0.1 9090'
 ```
 
-Send traffic to localhost.
+Observation: the VPN container receives the message.
 
-```sh
-echo "shared localhost test" | nc 127.0.0.1 9090
-```
-
-Observation:
-
-* traffic sent from `isolated` reaches the listener running in `tailscale`
-
-Attacker perspective: localhost is shared between containers using the same network namespace.
+Attacker perspective: localhost is shared across containers that share a network namespace.
 
 ---
 
-## Blue-Team Practical: Understand Namespace-Owned Port Publishing
+## Blue-Team Practical: Demonstrate Namespace-Owned Port Publishing
 
-Remove previous containers.
+Stop the environment.
 
 ```bash
-docker compose down
+docker compose -f compose-vpn.yml down
 ```
 
-Modify the Tailscale service to publish a port.
+Replace the entire `compose-vpn.yml` with the following configuration (no manual editing required).
 
-```yaml
-ports:
-  - "127.0.0.1:9090:9090"
+```bash
+cat > compose-vpn.yml <<'YAML'
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale
+    hostname: ts-demo
+
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    environment:
+      TS_STATE_DIR: /var/lib/tailscale
+
+    volumes:
+      - ./tailscale-state:/var/lib/tailscale
+
+    ports:
+      - "127.0.0.1:9090:9090"
+
+    command: tailscaled
+
+    restart: unless-stopped
+
+  app:
+    image: ubuntu:24.04
+    container_name: vpn-app
+
+    network_mode: "service:tailscale"
+
+    depends_on:
+      - tailscale
+
+    command:
+      - bash
+      - -c
+      - |
+        apt update &&
+        apt install -y           curl           iproute2           iputils-ping           dnsutils           netcat-openbsd           tcpdump &&
+        tail -f /dev/null
+YAML
 ```
 
 Restart the environment.
 
 ```bash
-docker compose up -d
+docker compose -f compose-vpn.yml up -d
 ```
 
-Inside the isolated container, start a listener.
+Start a listener inside the application container.
 
 ```bash
-docker exec -it isolated sh
-```
-
-Inside:
-
-```sh
-nc -l -p 9090
+docker exec vpn-app bash -c \
+'nc -l -p 9090'
 ```
 
 From the Docker host:
@@ -255,58 +282,40 @@ From the Docker host:
 nc -vz 127.0.0.1 9090
 ```
 
-Observation:
+Observation: the connection succeeds even though the listening process runs in the application container.
 
-* the connection succeeds
-
-Important observation:
-
-* the listening process exists inside `isolated`
-* but the published port belongs to the namespace owner (`tailscale`)
-
-Defensive interpretation: published ports must be configured on the namespace-owning VPN container.
+Defensive interpretation: published ports belong to the namespace-owning VPN container, not to the namespace-sharing application container.
 
 ---
 
-## Blue-Team Practical: Demonstrate Traffic Traversal
+## Red-Team Practical: Observe Traffic Through the VPN Namespace
 
-Install packet-capture tools in the VPN container.
+Start packet capture inside the VPN container.
 
 ```bash
-docker exec -it tailscale sh
-```
-
-```sh
-apk update
-apk add tcpdump
-```
-
-Start packet capture.
-
-```sh
+docker exec tailscale sh -c '
+apk update &&
+apk add tcpdump &&
 tcpdump -i any
+'
 ```
 
-In another terminal, generate traffic from the isolated container.
+In another terminal, generate traffic from the application container.
 
 ```bash
-docker exec -it isolated sh
+docker exec vpn-app bash -c '
+curl -I http://example.com
+ping -c 2 1.1.1.1
+'
 ```
 
-```sh
-curl google.com
-ping 1.1.1.1
-```
+Observation: traffic generated by the application container appears in captures taken inside the VPN container.
 
-Observation:
-
-* traffic generated by `isolated` appears inside the VPN container capture
-
-Defensive interpretation: all traffic from namespace-sharing containers traverses the VPN namespace.
+Attacker perspective: all application traffic traverses the VPN namespace.
 
 ---
 
-## Blue-Team Practical: Demonstrate Kill-Switch Behavior
+## Blue-Team Practical: Verify Tunnel Dependency
 
 Stop the VPN container.
 
@@ -314,29 +323,26 @@ Stop the VPN container.
 docker stop tailscale
 ```
 
-Attempt outbound connectivity from the isolated container.
+Attempt outbound access.
 
 ```bash
-docker exec -it isolated sh
+docker exec vpn-app bash -c \
+'curl -I http://example.com'
 ```
 
-```sh
-curl google.com
+Observation: connectivity fails because the application does not possess an independent network namespace.
+
+Defensive interpretation: namespace sharing can act as a strong containment mechanism because the application cannot simply route around the VPN.
+
+Restart the VPN container.
+
+```bash
+docker start tailscale
 ```
-
-Observation:
-
-* connectivity fails immediately
-
-Defensive interpretation: the isolated workload cannot bypass the VPN because it does not own a separate network namespace.
 
 ---
 
-## Blue-Team Practical: Exit Nodes and Full-Tunnel VPN Routing
-
-By default, Tailscale provides encrypted mesh connectivity but does not automatically route all internet traffic through another node.
-
-To force all traffic through a remote Tailscale node, configure an exit node.
+## Blue-Team Practical: Configure an Exit Node
 
 On another Tailscale-connected system:
 
@@ -344,69 +350,94 @@ On another Tailscale-connected system:
 sudo tailscale up --advertise-exit-node
 ```
 
-Inside the VPN container:
+Configure the VPN container to use that exit node.
 
 ```bash
-docker exec tailscale tailscale up --exit-node=<TAILSCALE-IP>
+docker exec tailscale \
+  tailscale up \
+  --exit-node=<TAILSCALE-IP>
 ```
 
-Verify public IP from the isolated container.
+Verify routing from the application container.
 
 ```bash
-docker exec -it isolated sh
+docker exec vpn-app bash -c \
+'curl ifconfig.me'
 ```
 
-```sh
-curl ifconfig.me
-```
+Observation: the public IP matches the exit node rather than the local Docker host.
 
-Observation:
-
-* the public IP corresponds to the exit node
-
-Defensive interpretation: exit nodes transform Tailscale from a mesh overlay into a full-tunnel VPN egress architecture.
+Defensive interpretation: exit nodes convert the deployment from mesh connectivity into full-tunnel VPN egress.
 
 ---
 
-## Defensive Considerations
+## Blue-Team Practical: Verify DNS Handling
 
-Defenders should verify:
-
-* DNS routing behavior
-* tunnel-failure behavior
-* route ownership
-* namespace sharing implications
-* localhost exposure
-* published port exposure
-* packet visibility
-* firewall enforcement
-
-Useful verification commands:
+Inspect resolver configuration.
 
 ```bash
-docker exec tailscale ip route
 docker exec tailscale cat /etc/resolv.conf
-
-docker exec isolated ip route
-docker exec isolated cat /etc/resolv.conf
-
-docker inspect isolated | grep IPAddress
+docker exec vpn-app cat /etc/resolv.conf
 ```
 
-A container using:
+Generate DNS traffic.
 
-```yaml
-network_mode: "service:tailscale"
+```bash
+docker exec vpn-app bash -c '
+dig example.com
+dig openai.com
+'
 ```
 
-typically does not possess its own independent Docker IP address.
+Observation: both containers use the same resolver configuration.
+
+Defensive interpretation: DNS policy is inherited from the VPN namespace. DNS-leak testing should be part of VPN validation.
+
+---
+
+## Chapter 8 Verification Commands
+
+```bash
+docker inspect tailscale
+
+docker inspect vpn-app
+
+docker exec tailscale ip addr
+docker exec tailscale ip route
+
+docker exec vpn-app ip addr
+docker exec vpn-app ip route
+
+docker exec tailscale tailscale status
+
+docker exec tailscale cat /etc/resolv.conf
+docker exec vpn-app cat /etc/resolv.conf
+```
+
+---
+
+## Chapter 8 Core Points
+
+VPN sidecars work by sharing a network namespace.
+
+`network_mode: "service:tailscale"` gives the application container the VPN container's interfaces, routes, DNS configuration, and localhost.
+
+Localhost is shared across namespace-sharing containers.
+
+Published ports belong to the namespace owner.
+
+All application traffic traverses the VPN namespace.
+
+DNS behavior, firewall policy, and routing policy are inherited from the VPN container.
+
+VPN sidecars should be treated as egress gateways and security boundaries, not merely privacy tools.
 
 ---
 
 ## Cleanup
 
 ```bash
-docker compose down
-```
+docker compose -f compose-vpn.yml down
 
----
+rm -rf tailscale-state
+```
