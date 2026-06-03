@@ -116,6 +116,9 @@ Open a second terminal and start a compact event stream.
 
 ```bash
 docker exec -it tetragon tetra getevents -o compact
+tetra getevents -o compact --event-types PROCESS_KPROBE
+docker cp policy.yaml tetragon:/tmp/policy.yaml
+tetra tracingpolicy add /tmp/policy.yaml
 ```
 
 Observation: the command waits for events. Leave this terminal open while generating behavior in the next practical.
