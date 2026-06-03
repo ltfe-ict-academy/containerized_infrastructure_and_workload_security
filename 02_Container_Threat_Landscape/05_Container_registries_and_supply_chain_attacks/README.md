@@ -23,6 +23,80 @@ That is six headline-grade supply-chain compromises in 26 months, with the same 
 
 Everything else in this module is a consequence of that paragraph.
 
+## The Supply Chain Risk Taxonomy
+
+Ten failure modes that turn a working registry into an attack surface. Each of the labs maps to one or more of them.
+
+1. **Blind trust in public registries.** "It's on Docker Hub, must be fine." Docker Hub has had cryptominer-laden images (`docker123321`, 2017-18, 17 images, millions of pulls) and unauthorised mirrors of legitimate images. Even "Official Images" can carry CVEs that ship for months before rebuild. Treat _every_ image you didn't build like third-party code: SBOM it, scan it, store it in a private registry with provenance attached.
+
+2. **Overpowered registry credentials.** A CI token that can push to any production repo is a credential that, if leaked, ends the conversation. Most pipelines run with a single robot account that can push to everything; the principle of least privilege says one robot per repo per environment, with push scope restricted by path. Harbor and most modern registries support this; almost nobody configures it.
+
+3. **Compromised CI/CD feeding the registry.** The image is fine. The Dockerfile is fine. But the _step_ that built it ran attacker code, or used a tagged third-party action that got rewritten under your feet. The tj-actions, Trivy, and Shai-Hulud incidents are all this category. CI is part of your supply chain; pin its actions to SHAs, restrict its tokens, and audit its outbound traffic.
+
+4. **No cryptographic verification.** "We trust this image because we trust the registry it came from." Wrong. The registry can be tag-swapped, mirrored maliciously, or compromised. Verification of a Sigstore signature at deploy time is the only thing that gives you cryptographic certainty that the bytes you are running came from the identity you expect.
+
+5. **No provenance.** "Where did this image come from?" If your answer is "the registry," you've described where it was _stored_, not where it was _built_. A SLSA provenance attestation tells you which source commit, which build platform, which workflow, which build parameters — and is signed by the build platform itself. Without this, you cannot do post-incident forensics, you cannot prove regulatory compliance (EO 14028, EU CRA), and you cannot detect the kind of build-time backdoor that hit XZ.
+
+6. **Registry scanning treated as a silver bullet.** "Trivy / Grype / Snyk found no CVEs, so the image is safe." It is safe _against the CVEs they know about today_. It is not safe against the next CVE (no scanner predicts the future), against insecure defaults, against credentials baked into a layer, or against malicious packages that the public DB hasn't caught yet. Scanning is necessary; it is the floor, not the ceiling.
+
+7. **Registry access rules too open.** Many internal Harbor/Quay deployments default to "authenticated users can pull anything." This is the same anti-pattern as a flat internal network. Sensitive images (production builds, anything containing internal addresses, certificates, customer-data fixtures) belong in projects that are restricted by role. Pull events should be logged and alerted on for sensitive projects.
+
+8. **Pull-through mirrors and cached content that nobody monitors.** A registry mirror or proxy cache (`registry-mirrors` in `daemon.json`, Harbor pull-through projects, JFrog remote repos) caches upstream images locally. The cache means yesterday's `nginx:1.27` and today's `nginx:1.27` could resolve to different bytes for different hosts on your network. Nobody alerts when the upstream digest changes. Old caches with vulnerable versions of images keep serving even after the upstream has been patched.
+
+9. **Registry availability and operational risk.** Your registry is now in your critical path for deployments, rollbacks, autoscaling, and disaster recovery. If your only copy of a production image is on Docker Hub and Docker Hub is having a bad day, your incident is now Docker Hub's incident. Mirror your dependencies. Run a fallback registry in another region. Have a documented recovery procedure for the case of "the registry is down and we need to redeploy now."
+
+10. **Stale `:latest` and the absence of cooldown.** Two opposite mistakes. Many production deployments never update their base images, accumulating CVEs for years. Many others auto-update on every `:latest` push, accepting whatever the upstream has pushed in the last hour — which is when supply-chain compromises bite. The right answer is a **cooldown** (Lab 7).
+
+## The Mental Model — Four Pillars
+
+Every meaningful statement about a container image hangs off four artifacts.
+
+| Pillar         | Tells you…                 | Produced by           | Format              | Checked by                                                                 |
+| -------------- | -------------------------- | --------------------- | ------------------- | -------------------------------------------------------------------------- |
+| **Image**      | "this is the running code" | the build             | OCI image manifest  | digest comparison (`docker pull` enforces it; `crane`/`skopeo` inspect it) |
+| **SBOM**       | _what is in_ the image     | build or scanner      | SPDX / CycloneDX    | `grype sbom:…`, `trivy sbom …`, Dependency-Track, DefectDojo               |
+| **Signature**  | _who_ put the image there  | signing identity (CI) | Sigstore / Notation | `cosign verify` (image), `cosign verify-blob` (file), `notation verify`    |
+| **Provenance** | _how_ the image was built  | build platform        | SLSA / in-toto      | `cosign verify-attestation`, `slsa-verifier`, `gh attestation verify`      |
+
+You need **all four** for meaningful supply-chain integrity. The image alone is just bytes. The SBOM without a signature is just a list anyone could forge. The signature without a provenance attestation only proves "someone we trust ran a build," not "they built it from the source we expect." This is the framework you will hear repeated under various names — **SLSA**, **SSDF**, **EO 14028**, **EU CRA** — they are all asking for the same four artifacts plus a way to verify them.
+
+> Note: Plain SBOM is of no use, the SBOM should also be signed, e.g., using `cosign attest --type cyclonedx --predicate sbom.json` or "attached" (not embedded, but pointed to) to the provenance.
+
+> Sample in-toto attestations (provenance) pseudocode:
+>
+> ```json
+> {
+>   "_type": "https://in-toto.io/Statement/v1",
+>   "subject": [
+>     { "name": "payments",
+>       "digest": { "sha256": "abc…" } }        ← the OUTPUT image, by digest
+>   ],
+>   "predicateType": "https://slsa.dev/provenance/v1",
+>   "predicate": {
+>     "buildDefinition": {
+>       "buildType": "https://…/github-actions-workflow…",
+>       "externalParameters": {
+>         "workflow": {                          ← a REFERENCE to the workflow
+>           "repository": "git+https://github.com/you/payments",
+>           "ref": "refs/heads/main",
+>           "path": ".github/workflows/build.yml"
+>         }
+>       },
+>       "resolvedDependencies": [
+>         { "uri": "git+https://github.com/you/payments@…",
+>           "digest": { "gitCommit": "def…" } }  ← the SOURCE, by commit digest
+>       ]
+>     },
+>     "runDetails": {
+>       "builder": { "id": "https://github.com/…/runner" },  ← WHO built it
+>       "metadata": { "invocationId": "…", "startedOn": "…", "finishedOn": "…" }
+>     }
+>   }
+> }
+> ```
+
+Module 2.3 (The Image Problem) covered _what is inside_ an image. This module covers _how it got to production_ and _how you prove that_.
+
 ## Learning Goals
 
 By the end of this hands-on, you should be able to:
@@ -38,20 +112,48 @@ By the end of this hands-on, you should be able to:
 - explain the **dependency cooldown** principle and why "patch immediately" is half the answer
 - name four major supply-chain incidents of 2024–2026 and what defence would have blocked each
 
-## The Mental Model — Four Pillars
+## Standards You Will Hear About
 
-Every meaningful statement about a container image hangs off four artifacts.
+A glossary, because the room will throw acronyms at you all week.
 
-| Pillar         | Tells you…                 | Produced by           | Format              | Checked by                                                                 |
-| -------------- | -------------------------- | --------------------- | ------------------- | -------------------------------------------------------------------------- |
-| **Image**      | "this is the running code" | the build             | OCI image manifest  | digest comparison (`docker pull` enforces it; `crane`/`skopeo` inspect it) |
-| **SBOM**       | _what is in_ the image     | build or scanner      | SPDX / CycloneDX    | `grype sbom:…`, `trivy sbom …`, Dependency-Track, DefectDojo               |
-| **Signature**  | _who_ put the image there  | signing identity (CI) | Sigstore / Notation | `cosign verify` (image), `cosign verify-blob` (file), `notation verify`    |
-| **Provenance** | _how_ the image was built  | build platform        | SLSA / in-toto      | `cosign verify-attestation`, `slsa-verifier`, `gh attestation verify`      |
+- **OCI** — Open Container Initiative. Three specs: image-spec (the manifest + layers format), distribution-spec (the HTTP API every registry implements), and runtime-spec (how to actually execute the bundle). When you `docker pull`, you are speaking distribution-spec to the registry and image-spec to the layers it returns.
+- **OCI artifacts** — the same image-spec also stores things that are _not_ images: SBOMs, signatures, attestations, Helm charts. ORAS is the tool for pushing/pulling them. When `cosign sign` runs, the signature lands in the registry as an OCI artifact tagged `sha256-<digest>.sig` next to the image it covers.
+- **SPDX** — Software Package Data Exchange. SBOM format. ISO/IEC 5962, originated at the Linux Foundation, version 2.3 / 3.0 current. Verbose, well established.
+- **CycloneDX** — OWASP's SBOM format. Slightly newer, more compact, has richer support for vulnerability/VEX attestation alongside the bill of materials. Either format is fine; pick one organisationally and stick with it.
+- **SARIF** — Static Analysis Results Interchange Format (OASIS standard). A JSON format for scanner output that GitHub, GitLab, and most security platforms consume directly. Trivy, Grype, and most scanners can emit SARIF — that is what you want for "show this finding in my PR review" workflows.
+- **VEX** — Vulnerability Exploitability eXchange. A signed statement that says, for a given CVE in a given artifact: _affected_ / _not_affected_ / _fixed_ / _under_investigation_. A scanner that finds CVE-X in your image, plus a vendor VEX that says "_not_affected_ because the vulnerable code path isn't reachable," is how you stop drowning in false positives.
+- **in-toto** — a framework (CNCF) for attesting "each step in the supply chain ran in the right order, with the right inputs, by the right party." Provenance documents are usually in-toto statements.
+- **SLSA** — Supply chain Levels for Software Artifacts (pronounced "salsa"). OpenSSF framework. The **Build track** currently defines four discrete tiers:
 
-You need **all four** for meaningful supply-chain integrity. The image alone is just bytes. The SBOM without a signature is just a list anyone could forge. The signature without a provenance attestation only proves "someone we trust ran a build," not "they built it from the source we expect." This is the framework you will hear repeated under various names — **SLSA**, **SSDF**, **EO 14028**, **EU CRA** — they are all asking for the same four artifacts plus a way to verify them.
+  | Level  | What's required                                                                                                                           |
+  | ------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+  | **L0** | No provenance. Default for "I built this on my laptop."                                                                                   |
+  | **L1** | The build platform generates provenance describing how the artifact was built; provenance is available to consumers (it may be unsigned). |
+  | **L2** | Builds run on a hosted platform that **signs** the provenance itself (so a leaked tenant credential cannot mint fake provenance).         |
+  | **L3** | Hardened, isolated build platform: runs cannot influence each other, signing material is inaccessible to user-defined build steps.        |
 
-Module 2.3 (The Image Problem) covered _what is inside_ an image. This module covers _how it got to production_ and _how you prove that_.
+  Most organisations should aim for **L2-L3**. GitHub-hosted runners with `slsa-framework/slsa-github-generator` produce L3-eligible signed provenance. (A "Source track" exists with its own levels; that's orthogonal to the build levels above.)
+
+- **CIS Docker Benchmark** — the de-facto compliance checklist for Docker hosts and Docker daemons. `docker-bench-security` runs the checks. Not registry-specific, but most enterprise registry deployments map their hardening to CIS controls. We'll touch this again in Module 4.
+- **Notation v2** (formerly Notary) — Microsoft/AWS-backed alternative to Sigstore. Same goal (signed OCI artifacts), different cryptography (long-lived keys, X.509). If your registry vendor is Microsoft, AWS, or you are in regulated environments that require non-keyless signatures, Notation is the supported path.
+
+## Registries In Production
+
+Not all registries are equal. Quick survey of what you might encounter:
+
+| Registry                             | Tag immutability      | Signing support                                    | Replication / mirror     | Hosted vs self-host |
+| ------------------------------------ | --------------------- | -------------------------------------------------- | ------------------------ | ------------------- |
+| **Docker Hub**                       | paid plans only       | external (cosign)                                  | Hub mirror feature       | hosted              |
+| **GitHub Container Registry (GHCR)** | yes (rules)           | OCI-native (cosign signatures stored as artifacts) | via GitHub Actions       | hosted              |
+| **AWS ECR**                          | yes (project setting) | OCI-native; integrates with Signer                 | cross-region replication | hosted              |
+| **Google Artifact Registry (GAR)**   | yes (per repo)        | Binary Authorization integrates with cosign        | regional replication     | hosted              |
+| **Quay (Red Hat)**                   | yes                   | Notary v1 (deprecated) + cosign                    | geo-replication          | both                |
+| **Harbor**                           | yes (per project)     | cosign + notation, built-in                        | replication policies     | self-host only      |
+| **JFrog Artifactory**                | yes                   | both                                               | cross-instance           | both                |
+
+For internal/regulated/air-gapped deployments, **Harbor** is the most common open-source choice. It is a full reference implementation: vulnerability scanning hooks, image signing policy enforcement, project-level RBAC, replication, retention, garbage collection. We will deploy one in Lab 6.
+
+---
 
 ## Prerequisites — Standalone Setup
 
@@ -113,71 +215,6 @@ Two important sub-categories of tags:
 - **Mutable channel tags** are pointers by design: `:latest`, `:stable`, `:edge`, `:dev`, `:7` (the "newest 7.x"), `:lts`. These are _supposed_ to move. They are convenient for development and disastrous for production, because their whole purpose is silent drift.
 
 The rule: **even when a tag looks immutable, it isn't unless the registry enforces it.** Pin to digests in production, period.
-
-## Standards You Will Hear About
-
-A glossary, because the room will throw acronyms at you all week.
-
-- **OCI** — Open Container Initiative. Three specs: image-spec (the manifest + layers format), distribution-spec (the HTTP API every registry implements), and runtime-spec (how to actually execute the bundle). When you `docker pull`, you are speaking distribution-spec to the registry and image-spec to the layers it returns.
-- **OCI artifacts** — the same image-spec also stores things that are _not_ images: SBOMs, signatures, attestations, Helm charts. ORAS is the tool for pushing/pulling them. When `cosign sign` runs, the signature lands in the registry as an OCI artifact tagged `sha256-<digest>.sig` next to the image it covers.
-- **SPDX** — Software Package Data Exchange. SBOM format. ISO/IEC 5962, originated at the Linux Foundation, version 2.3 / 3.0 current. Verbose, well established.
-- **CycloneDX** — OWASP's SBOM format. Slightly newer, more compact, has richer support for vulnerability/VEX attestation alongside the bill of materials. Either format is fine; pick one organisationally and stick with it.
-- **SARIF** — Static Analysis Results Interchange Format (OASIS standard). A JSON format for scanner output that GitHub, GitLab, and most security platforms consume directly. Trivy, Grype, and most scanners can emit SARIF — that is what you want for "show this finding in my PR review" workflows.
-- **VEX** — Vulnerability Exploitability eXchange. A signed statement that says, for a given CVE in a given artifact: _affected_ / _not_affected_ / _fixed_ / _under_investigation_. A scanner that finds CVE-X in your image, plus a vendor VEX that says "_not_affected_ because the vulnerable code path isn't reachable," is how you stop drowning in false positives.
-- **in-toto** — a framework (CNCF) for attesting "each step in the supply chain ran in the right order, with the right inputs, by the right party." Provenance documents are usually in-toto statements.
-- **SLSA** — Supply chain Levels for Software Artifacts (pronounced "salsa"). OpenSSF framework. The **Build track** currently defines four discrete tiers:
-
-  | Level  | What's required                                                                                                                           |
-  | ------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-  | **L0** | No provenance. Default for "I built this on my laptop."                                                                                   |
-  | **L1** | The build platform generates provenance describing how the artifact was built; provenance is available to consumers (it may be unsigned). |
-  | **L2** | Builds run on a hosted platform that **signs** the provenance itself (so a leaked tenant credential cannot mint fake provenance).         |
-  | **L3** | Hardened, isolated build platform: runs cannot influence each other, signing material is inaccessible to user-defined build steps.        |
-
-  Most organisations should aim for **L2-L3**. GitHub-hosted runners with `slsa-framework/slsa-github-generator` produce L3-eligible signed provenance. (A "Source track" exists with its own levels; that's orthogonal to the build levels above.)
-
-- **CIS Docker Benchmark** — the de-facto compliance checklist for Docker hosts and Docker daemons. `docker-bench-security` runs the checks. Not registry-specific, but most enterprise registry deployments map their hardening to CIS controls. We'll touch this again in Module 4.
-- **Notation v2** (formerly Notary) — Microsoft/AWS-backed alternative to Sigstore. Same goal (signed OCI artifacts), different cryptography (long-lived keys, X.509). If your registry vendor is Microsoft, AWS, or you are in regulated environments that require non-keyless signatures, Notation is the supported path.
-
-## Registries In Production
-
-Not all registries are equal. Quick survey of what you might encounter:
-
-| Registry                             | Tag immutability      | Signing support                                    | Replication / mirror     | Hosted vs self-host |
-| ------------------------------------ | --------------------- | -------------------------------------------------- | ------------------------ | ------------------- |
-| **Docker Hub**                       | paid plans only       | external (cosign)                                  | Hub mirror feature       | hosted              |
-| **GitHub Container Registry (GHCR)** | yes (rules)           | OCI-native (cosign signatures stored as artifacts) | via GitHub Actions       | hosted              |
-| **AWS ECR**                          | yes (project setting) | OCI-native; integrates with Signer                 | cross-region replication | hosted              |
-| **Google Artifact Registry (GAR)**   | yes (per repo)        | Binary Authorization integrates with cosign        | regional replication     | hosted              |
-| **Quay (Red Hat)**                   | yes                   | Notary v1 (deprecated) + cosign                    | geo-replication          | both                |
-| **Harbor**                           | yes (per project)     | cosign + notation, built-in                        | replication policies     | self-host only      |
-| **JFrog Artifactory**                | yes                   | both                                               | cross-instance           | both                |
-
-For internal/regulated/air-gapped deployments, **Harbor** is the most common open-source choice. It is a full reference implementation: vulnerability scanning hooks, image signing policy enforcement, project-level RBAC, replication, retention, garbage collection. We will deploy one in Lab 6.
-
-## The Supply Chain Risk Taxonomy
-
-Ten failure modes that turn a working registry into an attack surface. Each of the labs maps to one or more of them.
-
-1. **Blind trust in public registries.** "It's on Docker Hub, must be fine." Docker Hub has had cryptominer-laden images (`docker123321`, 2017-18, 17 images, millions of pulls) and unauthorised mirrors of legitimate images. Even "Official Images" can carry CVEs that ship for months before rebuild. Treat _every_ image you didn't build like third-party code: SBOM it, scan it, store it in a private registry with provenance attached.
-
-2. **Overpowered registry credentials.** A CI token that can push to any production repo is a credential that, if leaked, ends the conversation. Most pipelines run with a single robot account that can push to everything; the principle of least privilege says one robot per repo per environment, with push scope restricted by path. Harbor and most modern registries support this; almost nobody configures it.
-
-3. **Compromised CI/CD feeding the registry.** The image is fine. The Dockerfile is fine. But the _step_ that built it ran attacker code, or used a tagged third-party action that got rewritten under your feet. The tj-actions, Trivy, and Shai-Hulud incidents are all this category. CI is part of your supply chain; pin its actions to SHAs, restrict its tokens, and audit its outbound traffic.
-
-4. **No cryptographic verification.** "We trust this image because we trust the registry it came from." Wrong. The registry can be tag-swapped, mirrored maliciously, or compromised. Verification of a Sigstore signature at deploy time is the only thing that gives you cryptographic certainty that the bytes you are running came from the identity you expect.
-
-5. **No provenance.** "Where did this image come from?" If your answer is "the registry," you've described where it was _stored_, not where it was _built_. A SLSA provenance attestation tells you which source commit, which build platform, which workflow, which build parameters — and is signed by the build platform itself. Without this, you cannot do post-incident forensics, you cannot prove regulatory compliance (EO 14028, EU CRA), and you cannot detect the kind of build-time backdoor that hit XZ.
-
-6. **Registry scanning treated as a silver bullet.** "Trivy / Grype / Snyk found no CVEs, so the image is safe." It is safe _against the CVEs they know about today_. It is not safe against the next CVE (no scanner predicts the future), against insecure defaults, against credentials baked into a layer, or against malicious packages that the public DB hasn't caught yet. Scanning is necessary; it is the floor, not the ceiling.
-
-7. **Registry access rules too open.** Many internal Harbor/Quay deployments default to "authenticated users can pull anything." This is the same anti-pattern as a flat internal network. Sensitive images (production builds, anything containing internal addresses, certificates, customer-data fixtures) belong in projects that are restricted by role. Pull events should be logged and alerted on for sensitive projects.
-
-8. **Pull-through mirrors and cached content that nobody monitors.** A registry mirror or proxy cache (`registry-mirrors` in `daemon.json`, Harbor pull-through projects, JFrog remote repos) caches upstream images locally. The cache means yesterday's `nginx:1.27` and today's `nginx:1.27` could resolve to different bytes for different hosts on your network. Nobody alerts when the upstream digest changes. Old caches with vulnerable versions of images keep serving even after the upstream has been patched.
-
-9. **Registry availability and operational risk.** Your registry is now in your critical path for deployments, rollbacks, autoscaling, and disaster recovery. If your only copy of a production image is on Docker Hub and Docker Hub is having a bad day, your incident is now Docker Hub's incident. Mirror your dependencies. Run a fallback registry in another region. Have a documented recovery procedure for the case of "the registry is down and we need to redeploy now."
-
-10. **Stale `:latest` and the absence of cooldown.** Two opposite mistakes. Many production deployments never update their base images, accumulating CVEs for years. Many others auto-update on every `:latest` push, accepting whatever the upstream has pushed in the last hour — which is when supply-chain compromises bite. The right answer is a **cooldown** (Lab 7).
 
 ---
 
